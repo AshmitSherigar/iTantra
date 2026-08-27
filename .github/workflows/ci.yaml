@@ -29,13 +29,16 @@ jobs:
         run: npm ci
 
       - name: Type Check
-        run: npx --no-install tsc --noEmit
+        run: npm exec --no -- tsc --noEmit
 
-      - name: Biome Check
-        run: npm run check
+      - name: ESLint
+        run: npm run lint
+
+      - name: Prettier Check
+        run: npm run format:check
 
       - name: Expo Doctor
-        run: npx --no-install expo-doctor
+        run: npm exec --no -- expo-doctor
 
-      - name: Build Check
-        run: npx expo export --platform all
+      - name: Expo Export Check
+        run: npm exec --no -- expo export --platform all
