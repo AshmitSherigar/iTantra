@@ -63,7 +63,6 @@ This starts the application in a web browser in localhost:8081.
 
 ---
 
-
 ## Code Quality
 
 ### Lint
