@@ -1,4 +1,5 @@
-import { Text, View } from 'react-native';
+import { View } from 'react-native';
+import { STTTestScreen } from '../features/stt/STTTestScreen';
 
 export default function Index() {
   return (
@@ -7,9 +8,10 @@ export default function Index() {
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
+        backgroundColor: '#f0f0f0',
       }}
     >
-      <Text>Edit app/index.tsx to edit this screen.</Text>
+      <STTTestScreen />
     </View>
   );
 }

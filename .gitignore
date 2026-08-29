@@ -40,3 +40,15 @@ yarn-error.*
 
 # Temporary / backup files
 *.orig.*
+
+# IDEs
+.idea/
+.vscode/
+
+# Audio
+*.wav
+
+# Models
+assets/models/
+*.onnx
+
