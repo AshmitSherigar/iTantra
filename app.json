@@ -7,11 +7,9 @@
     "icon": "./assets/images/icon.png",
     "scheme": "lowlatencysttapp",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true
     },
-
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
@@ -19,7 +17,6 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "permissions": [
         "android.permission.BLUETOOTH",
@@ -29,7 +26,8 @@
         "android.permission.BLUETOOTH_CONNECT",
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION"
-      ]
+      ],
+      "package": "com.anonymous.lowlatencysttapp"
     },
     "web": {
       "output": "static",
@@ -49,7 +47,11 @@
             "backgroundColor": "#000000"
           }
         }
-      ]
+      ],
+      "expo-font",
+      "expo-image",
+      "expo-status-bar",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,
