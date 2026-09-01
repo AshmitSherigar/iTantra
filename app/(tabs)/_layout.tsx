@@ -27,7 +27,6 @@ export default function TabsLayout() {
 
         tabBarStyle: {
           height: 60 + insets.bottom,
-          paddingTop: 6,
           paddingBottom: Math.max(insets.bottom, 6),
 
           backgroundColor: colors.surface,
@@ -56,11 +55,11 @@ export default function TabsLayout() {
       />
 
       <Tabs.Screen
-        name="history"
+        name="bluetooth"
         options={{
-          title: 'History',
+          title: 'Bluetooth',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="time-outline" size={size} color={color} />
+            <Ionicons name="bluetooth-outline" size={size} color={color} />
           ),
         }}
       />
