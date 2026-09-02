@@ -57,6 +57,21 @@ export class STTEngine {
     return result.text;
   }
 
+  async transcribeSamples(samples: number[], sampleRate: number): Promise<string> {
+    if (!this.stt) {
+      await this.init();
+    }
+
+    if (!this.stt) {
+      throw new Error(
+        'STT Engine not initialized. (Native module missing, running on Web, or init failed)'
+      );
+    }
+
+    const result = await this.stt.transcribeSamples(samples, sampleRate);
+    return result.text;
+  }
+
   async cleanup(): Promise<void> {
     if (this.initPromise) {
       await this.initPromise;

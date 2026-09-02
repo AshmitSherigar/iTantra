@@ -8,8 +8,11 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+
+import { useVoiceMessage } from '../../features/audio/useVoiceMessage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { Buffer } from 'buffer';
 
 import {
   requestBluetoothPermission,
@@ -52,6 +55,15 @@ export default function BluetoothScreen() {
   const [isScanning, setIsScanning] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [bluetoothReady, setBluetoothReady] = useState(false);
+
+  const {
+    isRecording: isVoiceRecording,
+    isTranscribing,
+    partialText,
+    error: voiceError,
+    startVoice,
+    stopVoice,
+  } = useVoiceMessage();
 
   const removeDeviceListenerRef = useRef<(() => void) | undefined>(undefined);
   const removeCentralValueListenerRef = useRef<(() => void) | undefined>(undefined);
@@ -115,18 +127,17 @@ export default function BluetoothScreen() {
   };
 
   const hexToText = (hex: string) => {
-    let text = '';
-    for (let i = 0; i < hex.length; i += 2) {
-      const byte = parseInt(hex.substring(i, i + 2), 16);
-      text += String.fromCharCode(byte);
+    try {
+      return Buffer.from(hex, 'hex').toString('utf-8');
+    } catch (e) {
+      console.warn('Failed to decode hex to text:', e);
+      return '';
     }
-    return text;
   };
 
-  const textToHex = (text: string) =>
-    Array.from(text)
-      .map((c) => c.charCodeAt(0).toString(16).padStart(2, '0'))
-      .join('');
+  const textToHex = (text: string) => {
+    return Buffer.from(text, 'utf-8').toString('hex');
+  };
 
   const addMessage = (text: string, sender: 'me' | 'other') => {
     setMessages((current) => [
@@ -279,6 +290,49 @@ export default function BluetoothScreen() {
       console.log('No connection');
     } catch (error) {
       console.log('Send failed:', error);
+    }
+  };
+
+  /** Send an arbitrary text string over BLE (used by both typed & voice messages). */
+  const sendTextOverBLE = async (text: string) => {
+    const hexMsg = textToHex(text);
+
+    try {
+      if (connectedDeviceId) {
+        await writeCharacteristic(
+          connectedDeviceId,
+          SERVICE_UUID,
+          RX_CHARACTERISTIC_UUID,
+          hexMsg,
+          'write',
+        );
+        addMessage(text, 'me');
+        return;
+      }
+
+      if (peripheralCentralId) {
+        updateCharacteristicValue(SERVICE_UUID, TX_CHARACTERISTIC_UUID, hexMsg, true);
+        addMessage(text, 'me');
+        return;
+      }
+
+      console.log('No connection — cannot send voice message');
+    } catch (error) {
+      console.log('Voice send failed:', error);
+    }
+  };
+
+  /** Toggle voice recording on/off.  On stop → transcribe → send. */
+  const handleVoiceToggle = async () => {
+    if (isVoiceRecording) {
+      // Stop recording → transcribe → send
+      const text = await stopVoice();
+      if (text) {
+        await sendTextOverBLE(text);
+      }
+    } else {
+      // Start recording
+      await startVoice();
     }
   };
 
@@ -543,6 +597,54 @@ export default function BluetoothScreen() {
             )}
           </ScrollView>
 
+          {/* Voice recording / transcribing indicator */}
+          {(isVoiceRecording || isTranscribing) && (
+            <View
+              style={[
+                styles.voiceIndicator,
+                {
+                  backgroundColor: isVoiceRecording ? '#FEE2E2' : '#DBEAFE',
+                  borderTopColor: colors.border,
+                },
+              ]}
+            >
+              <View style={styles.voiceIndicatorIcon}>
+                {isTranscribing ? (
+                  <ActivityIndicator size="small" color={colors.primary} />
+                ) : (
+                  <View style={styles.recordingPulse} />
+                )}
+              </View>
+              <View style={styles.voiceIndicatorTextContainer}>
+                <Text
+                  style={[
+                    styles.voiceIndicatorText,
+                    { color: isVoiceRecording ? colors.error : colors.primary },
+                  ]}
+                >
+                  {isVoiceRecording ? 'Recording… Tap mic to stop' : 'Transcribing speech…'}
+                </Text>
+                {isVoiceRecording && partialText.length > 0 && (
+                  <Text
+                    style={[styles.partialTranscript, { color: colors.text }]}
+                    numberOfLines={2}
+                  >
+                    {partialText}
+                  </Text>
+                )}
+              </View>
+            </View>
+          )}
+
+          {/* Voice error message */}
+          {voiceError && !isVoiceRecording && !isTranscribing && (
+            <View style={[styles.voiceErrorBar, { borderTopColor: colors.border }]}>
+              <Text style={[styles.voiceErrorText, { color: colors.error }]}>
+                {voiceError}
+              </Text>
+            </View>
+          )}
+
           <View
             style={[
               styles.inputContainer,
@@ -552,15 +654,44 @@ export default function BluetoothScreen() {
             <TextInput
               value={message}
               onChangeText={setMessage}
-              placeholder="Type a message..."
+              placeholder={isVoiceRecording ? 'Recording…' : 'Type a message...'}
               placeholderTextColor={colors.textSecondary}
               style={[
                 styles.input,
                 { backgroundColor: colors.inputBackground, color: colors.text },
               ]}
               multiline
+              editable={!isVoiceRecording && !isTranscribing}
             />
 
+            {/* Mic button — voice-to-text */}
+            <TouchableOpacity
+              style={[
+                styles.micButton,
+                {
+                  backgroundColor: isVoiceRecording
+                    ? colors.error
+                    : isTranscribing
+                      ? colors.inputBackground
+                      : colors.inputBackground,
+                },
+              ]}
+              onPress={handleVoiceToggle}
+              disabled={isTranscribing}
+              activeOpacity={0.82}
+            >
+              {isTranscribing ? (
+                <ActivityIndicator size="small" color={colors.primary} />
+              ) : (
+                <Ionicons
+                  name={isVoiceRecording ? 'stop' : 'mic'}
+                  size={20}
+                  color={isVoiceRecording ? '#FFFFFF' : colors.primary}
+                />
+              )}
+            </TouchableOpacity>
+
+            {/* Send button */}
             <TouchableOpacity
               style={[
                 styles.sendButton,
@@ -568,7 +699,7 @@ export default function BluetoothScreen() {
                   backgroundColor: message.trim() ? colors.primary : colors.inputBackground,
                 },
               ]}
-              disabled={!message.trim()}
+              disabled={!message.trim() || isVoiceRecording || isTranscribing}
               onPress={sendMessage}
               activeOpacity={0.82}
             >
@@ -897,5 +1028,62 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+
+  micButton: {
+    width: 46,
+    height: 46,
+    borderRadius: Radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  voiceIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 10,
+    borderTopWidth: 1,
+  },
+
+  voiceIndicatorIcon: {
+    marginRight: 8,
+    width: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  voiceIndicatorTextContainer: {
+    flex: 1,
+  },
+
+  voiceIndicatorText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+
+  partialTranscript: {
+    fontSize: 14,
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
+
+  recordingPulse: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#DC2626',
+  },
+
+  voiceErrorBar: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    backgroundColor: '#FEF2F2',
+  },
+
+  voiceErrorText: {
+    fontSize: 12,
+    fontWeight: '500',
   },
 });
