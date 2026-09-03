@@ -10,6 +10,8 @@ import {
 } from 'react-native';
 
 import { useVoiceMessage } from '../../features/audio/useVoiceMessage';
+import { useAutoSpeak } from '../../features/tts/useAutoSpeak';
+import { BleIncomingTextTracker } from '../../features/tts/bleTtsText';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Buffer } from 'buffer';
@@ -29,6 +31,7 @@ import {
   subscribeToCharacteristic,
   writeCharacteristic,
   updateCharacteristicValue,
+  requestMTU,
 } from 'react-native-bluetooth-ble';
 
 import { useTheme } from '../../context/ThemeContext';
@@ -37,6 +40,28 @@ import { FontSize, Radius, Spacing } from '../../constants/theme';
 const SERVICE_UUID = '71f271d0-8f4c-4c4d-8a2d-6f3a9497b41d';
 const RX_CHARACTERISTIC_UUID = '4ad4a6d2-3f4a-477c-9832-5e0d8f7654d8';
 const TX_CHARACTERISTIC_UUID = '8b3e8c1f-5d42-4f77-a91d-6c3e2b8a5f19';
+
+/**
+ * BLE ATT default MTU is 23 bytes -> 20 bytes of usable payload.
+ * Anything larger sent in a single write/notify gets truncated or
+ * fails silently (iOS `updateValue` returns false, Android truncates),
+ * which is why long / multi-byte (Hindi, emoji) messages arrived garbled.
+ * We therefore always fragment into 20-byte packets and reassemble.
+ */
+const MAX_BYTES_PER_PACKET = 20;
+const MAX_HEX_PER_PACKET = MAX_BYTES_PER_PACKET * 2; // 40 hex chars
+const CHUNK_DELAY_MS = 30;
+const REASSEMBLY_TIMEOUT_MS = 15000;
+
+// Control frames use a Unit Separator prefix so normal typed / transcribed
+// text can never collide with them.
+const START_FRAME_RE = /^\u001FBLK:S:([0-9a-f]{4}):(\d+)\u001F$/;
+const END_FRAME_RE = /^\u001FBLK:E:([0-9a-f]{4})\u001F$/;
+const makeFrameId = () =>
+  Math.floor(Math.random() * 0xffff)
+    .toString(16)
+    .padStart(4, '0');
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 type ChatMessage = {
   id: string;
@@ -65,11 +90,56 @@ export default function BluetoothScreen() {
     stopVoice,
   } = useVoiceMessage();
 
+  // Auto-speak incoming messages via streaming Hindi TTS.
+  const {
+    enabled: ttsEnabled,
+    setEnabled: setTtsEnabled,
+    isReady: ttsReady,
+    isSpeaking: ttsSpeaking,
+    stop: stopTts,
+    speakFullMessage,
+    beginStream: ttsBeginStream,
+    pushStreamText: ttsPushText,
+    endStream: ttsEndStream,
+  } = useAutoSpeak(true);
+
+  // Latest TTS callbacks for use inside BLE event listeners (which are
+  // registered once per connection and would otherwise capture stale closures).
+  const ttsRef = useRef({
+    speakFullMessage,
+    beginStream: ttsBeginStream,
+    pushText: ttsPushText,
+    endStream: ttsEndStream,
+  });
+  useEffect(() => {
+    ttsRef.current = {
+      speakFullMessage,
+      beginStream: ttsBeginStream,
+      pushText: ttsPushText,
+      endStream: ttsEndStream,
+    };
+  }, [speakFullMessage, ttsBeginStream, ttsPushText, ttsEndStream]);
+
+  // Tracks decode progress of the in-flight chunked message so each newly
+  // completed slice of text is pushed to streaming TTS exactly once —
+  // speech starts while later BLE packets are still arriving.
+  const incomingTextTrackerRef = useRef(new BleIncomingTextTracker());
+
   const removeDeviceListenerRef = useRef<(() => void) | undefined>(undefined);
   const removeCentralValueListenerRef = useRef<(() => void) | undefined>(undefined);
   const removePeripheralWriteListenerRef = useRef<(() => void) | undefined>(undefined);
   const removePeripheralSubscribedListenerRef = useRef<(() => void) | undefined>(undefined);
   const removePeripheralUnsubscribedListenerRef = useRef<(() => void) | undefined>(undefined);
+
+  // Reassembly buffer for chunked incoming messages. Only one peer sends to
+  // us at a time (TX notifies as central, RX writes as peripheral), so a
+  // single buffer is sufficient.
+  const reassemblyRef = useRef<{
+    id: string | null;
+    total: number;
+    chunks: string[];
+    timer: ReturnType<typeof setTimeout> | null;
+  }>({ id: null, total: 0, chunks: [], timer: null });
 
   useEffect(() => {
     return () => {
@@ -78,6 +148,8 @@ export default function BluetoothScreen() {
       removePeripheralWriteListenerRef.current?.();
       removePeripheralSubscribedListenerRef.current?.();
       removePeripheralUnsubscribedListenerRef.current?.();
+      const state = reassemblyRef.current;
+      if (state.timer) clearTimeout(state.timer);
     };
   }, []);
 
@@ -126,24 +198,166 @@ export default function BluetoothScreen() {
     console.log('Scan started');
   };
 
-  const hexToText = (hex: string) => {
+  const hexToText = (hex: string | null | undefined): string | null => {
+    if (hex == null) return null;
     try {
-      return Buffer.from(hex, 'hex').toString('utf-8');
+      // Native sides disagree on formatting: Android keeps spaces, iOS only
+      // trims the ends and pads odd-length with "0" (corrupting data), and
+      // some stacks add "0x" / separators. Normalise before decoding.
+      const clean = hex
+        .trim()
+        .replace(/^0x/i, '')
+        .replace(/[\s_\-:]/g, '')
+        .toLowerCase();
+      if (!clean) return null;
+      if (clean.length % 2 !== 0) {
+        console.warn('Dropping odd-length hex payload');
+        return null;
+      }
+      if (!/^[0-9a-f]*$/.test(clean)) {
+        console.warn('Dropping non-hex payload');
+        return null;
+      }
+      return Buffer.from(clean, 'hex').toString('utf-8');
     } catch (e) {
       console.warn('Failed to decode hex to text:', e);
-      return '';
+      return null;
     }
   };
 
   const textToHex = (text: string) => {
-    return Buffer.from(text, 'utf-8').toString('hex');
+    return Buffer.from(text, 'utf-8').toString('hex').toLowerCase();
+  };
+
+  const splitHexIntoPackets = (hex: string): string[] => {
+    const packets: string[] = [];
+    for (let i = 0; i < hex.length; i += MAX_HEX_PER_PACKET) {
+      packets.push(hex.slice(i, i + MAX_HEX_PER_PACKET));
+    }
+    return packets;
   };
 
   const addMessage = (text: string, sender: 'me' | 'other') => {
+    if (!text) return;
     setMessages((current) => [
       ...current,
       { id: Date.now().toString() + Math.random().toString(), text, sender },
     ]);
+  };
+
+  const clearReassembly = () => {
+    const state = reassemblyRef.current;
+    if (state.timer) clearTimeout(state.timer);
+    reassemblyRef.current = { id: null, total: 0, chunks: [], timer: null };
+  };
+
+  const flushReassembly = () => {
+    const state = reassemblyRef.current;
+    if (!state.id || state.chunks.length === 0) {
+      clearReassembly();
+      return;
+    }
+    const joined = state.chunks.join('');
+    const text = hexToText(joined);
+    clearReassembly();
+    // The full text arrived via packets — its speakable parts were already
+    // pushed to streaming TTS as packets arrived; this flushes the tail.
+    ttsRef.current.endStream();
+    if (text) {
+      addMessage(text, 'other');
+    } else {
+      console.warn('Discarding undecodable chunked message');
+    }
+  };
+
+  const armReassemblyTimeout = () => {
+    const state = reassemblyRef.current;
+    if (state.timer) clearTimeout(state.timer);
+    state.timer = setTimeout(() => {
+      console.warn('BLE reassembly timed out — flushing best effort');
+      flushReassembly();
+    }, REASSEMBLY_TIMEOUT_MS);
+  };
+
+  /**
+   * Every BLE notification / write event funnels through here.
+   * - Control frames (START/END) drive the reassembly buffer and are never shown.
+   * - Data packets while reassembling are stored as RAW HEX (byte-exact) so
+   *   multi-byte UTF-8 (Hindi, emoji) split across packets reassembles cleanly.
+   *   Newly-completed text is also pushed to streaming TTS immediately, so
+   *   speech starts while later packets are still in flight.
+   * - Anything else is a complete single-packet (or natively reassembled)
+   *   message and is decoded + spoken immediately. This keeps backward
+   *   compatibility with peers that send short messages without framing.
+   */
+  const handleIncomingHex = (hex: string | null | undefined) => {
+    if (hex == null) return;
+    const text = hexToText(hex);
+
+    if (text) {
+      const startMatch = text.match(START_FRAME_RE);
+      if (startMatch) {
+        const [, id, totalStr] = startMatch;
+        const total = parseInt(totalStr, 10);
+        if (!Number.isFinite(total) || total <= 0 || total > 5000) {
+          console.warn('Ignoring invalid START frame:', text);
+          return;
+        }
+        clearReassembly();
+        reassemblyRef.current = { id, total, chunks: [], timer: null };
+        // New streamed message: reset decode tracking and start a fresh
+        // TTS utterance (flushes any orphaned tail from a lost END).
+        incomingTextTrackerRef.current.reset();
+        ttsRef.current.beginStream();
+        armReassemblyTimeout();
+        return;
+      }
+      const endMatch = text.match(END_FRAME_RE);
+      if (endMatch) {
+        const [, id] = endMatch;
+        if (reassemblyRef.current.id !== id) {
+          console.warn('Ignoring END for unknown message:', id);
+          return;
+        }
+        flushReassembly();
+        return;
+      }
+    }
+
+    // Not a control frame.
+    if (reassemblyRef.current.id) {
+      const clean = hex
+        .trim()
+        .replace(/^0x/i, '')
+        .replace(/[\s_\-:]/g, '')
+        .toLowerCase();
+      if (!clean || clean.length % 2 !== 0 || !/^[0-9a-f]*$/.test(clean)) {
+        console.warn('Dropping corrupt data packet during reassembly');
+        return;
+      }
+      reassemblyRef.current.chunks.push(clean);
+      // Streaming TTS: decode everything received so far and speak only
+      // the newly-completed characters (handles Hindi split across packets).
+      try {
+        const fresh = incomingTextTrackerRef.current.pushJoinedHex(
+          reassemblyRef.current.chunks.join(''),
+        );
+        if (fresh) ttsRef.current.pushText(fresh);
+      } catch (e) {
+        console.warn('Streaming TTS push failed:', e);
+      }
+      armReassemblyTimeout();
+      // Tolerate a lost END frame: if we already have everything, flush.
+      if (reassemblyRef.current.chunks.length >= reassemblyRef.current.total) {
+        flushReassembly();
+      }
+      return;
+    }
+
+    if (text == null || text === '') return;
+    addMessage(text, 'other');
+    // Single-packet message — speak it in full (queued behind any speech).
+    ttsRef.current.speakFullMessage(text);
   };
 
   const clearConnection = () => {
@@ -151,6 +365,10 @@ export default function BluetoothScreen() {
     setPeripheralCentralId(null);
     setMessages([]);
     setMessage('');
+    clearReassembly();
+    incomingTextTrackerRef.current.reset();
+    // Finish any half-streamed utterance so its tail is still spoken.
+    ttsRef.current.endStream();
   };
 
   const setupPeripheralListeners = () => {
@@ -167,7 +385,7 @@ export default function BluetoothScreen() {
           console.log('Ignoring peripheral write: not RX');
           return;
         }
-        addMessage(hexToText(event.value), 'other');
+        handleIncomingHex(event.value);
       },
     );
 
@@ -179,6 +397,8 @@ export default function BluetoothScreen() {
         if (event.characteristicUUID.toLowerCase() !== TX_CHARACTERISTIC_UUID.toLowerCase()) return;
         setPeripheralCentralId(event.centralId);
         setMessages([]);
+        clearReassembly();
+        incomingTextTrackerRef.current.reset();
         console.log('Peripheral chat is ready');
       },
     );
@@ -191,6 +411,9 @@ export default function BluetoothScreen() {
         if (event.characteristicUUID.toLowerCase() !== TX_CHARACTERISTIC_UUID.toLowerCase()) return;
         setPeripheralCentralId(null);
         setMessages([]);
+        clearReassembly();
+        incomingTextTrackerRef.current.reset();
+        ttsRef.current.endStream();
       },
     );
 
@@ -247,11 +470,19 @@ export default function BluetoothScreen() {
           if (event.deviceId !== deviceId) return;
           if (event.serviceUUID.toLowerCase() !== SERVICE_UUID.toLowerCase()) return;
           if (event.characteristicUUID.toLowerCase() !== TX_CHARACTERISTIC_UUID.toLowerCase()) return;
-          addMessage(hexToText(event.value), 'other');
+          handleIncomingHex(event.value);
         },
       );
 
       await subscribeToCharacteristic(deviceId, SERVICE_UUID, TX_CHARACTERISTIC_UUID);
+
+      // Best effort: raise ATT MTU so fewer packets are needed. Chunking to
+      // 20 bytes still keeps us safe when negotiation fails (e.g. iOS).
+      try {
+        await requestMTU(deviceId, 512);
+      } catch (e) {
+        console.log('MTU request failed (non-fatal, using 20-byte chunks):', e);
+      }
       console.log('CONNECT COMPLETE');
     } catch (error) {
       console.log('CONNECT ERROR:', error);
@@ -261,33 +492,73 @@ export default function BluetoothScreen() {
     }
   };
 
+  /**
+   * Low-level send: fragments the hex payload into 20-byte BLE packets.
+   * Short messages use a single packet (backward compatible). Long messages
+   * use START -> data packets -> END framing so the peer can reassemble
+   * byte-exact UTF-8 regardless of MTU.
+   */
+  const sendHexFramed = async (
+    hexPayload: string,
+    writeCentral: (packetHex: string) => Promise<void>,
+    notifyPeripheral: (packetHex: string) => Promise<void>,
+  ) => {
+    if (!hexPayload) return;
+    if (hexPayload.length <= MAX_HEX_PER_PACKET) {
+      if (connectedDeviceId) await writeCentral(hexPayload);
+      else await notifyPeripheral(hexPayload);
+      return;
+    }
+
+    const chunks = splitHexIntoPackets(hexPayload);
+    const id = makeFrameId();
+    const startHex = textToHex(`\u001FBLK:S:${id}:${chunks.length}\u001F`);
+    const endHex = textToHex(`\u001FBLK:E:${id}\u001F`);
+
+    if (connectedDeviceId) {
+      await writeCentral(startHex);
+      for (const chunk of chunks) {
+        await delay(CHUNK_DELAY_MS);
+        await writeCentral(chunk);
+      }
+      await delay(CHUNK_DELAY_MS);
+      await writeCentral(endHex);
+    } else {
+      await notifyPeripheral(startHex);
+      for (const chunk of chunks) {
+        await delay(CHUNK_DELAY_MS);
+        await notifyPeripheral(chunk);
+      }
+      await delay(CHUNK_DELAY_MS);
+      await notifyPeripheral(endHex);
+    }
+  };
+
   const sendMessage = async () => {
     const trimmedMessage = message.trim();
     if (!trimmedMessage) return;
+    if (!connectedDeviceId && !peripheralCentralId) {
+      console.log('No connection');
+      return;
+    }
     const hexMessage = textToHex(trimmedMessage);
 
     try {
-      if (connectedDeviceId) {
-        await writeCharacteristic(
-          connectedDeviceId,
-          SERVICE_UUID,
-          RX_CHARACTERISTIC_UUID,
-          hexMessage,
-          'write',
-        );
-        addMessage(trimmedMessage, 'me');
-        setMessage('');
-        return;
-      }
-
-      if (peripheralCentralId) {
-        updateCharacteristicValue(SERVICE_UUID, TX_CHARACTERISTIC_UUID, hexMessage, true);
-        addMessage(trimmedMessage, 'me');
-        setMessage('');
-        return;
-      }
-
-      console.log('No connection');
+      await sendHexFramed(
+        hexMessage,
+        (packetHex) =>
+          writeCharacteristic(
+            connectedDeviceId!,
+            SERVICE_UUID,
+            RX_CHARACTERISTIC_UUID,
+            packetHex,
+            'write',
+          ),
+        (packetHex) =>
+          updateCharacteristicValue(SERVICE_UUID, TX_CHARACTERISTIC_UUID, packetHex, true),
+      );
+      addMessage(trimmedMessage, 'me');
+      setMessage('');
     } catch (error) {
       console.log('Send failed:', error);
     }
@@ -295,28 +566,29 @@ export default function BluetoothScreen() {
 
   /** Send an arbitrary text string over BLE (used by both typed & voice messages). */
   const sendTextOverBLE = async (text: string) => {
-    const hexMsg = textToHex(text);
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    if (!connectedDeviceId && !peripheralCentralId) {
+      console.log('No connection — cannot send voice message');
+      return;
+    }
+    const hexMsg = textToHex(trimmed);
 
     try {
-      if (connectedDeviceId) {
-        await writeCharacteristic(
-          connectedDeviceId,
-          SERVICE_UUID,
-          RX_CHARACTERISTIC_UUID,
-          hexMsg,
-          'write',
-        );
-        addMessage(text, 'me');
-        return;
-      }
-
-      if (peripheralCentralId) {
-        updateCharacteristicValue(SERVICE_UUID, TX_CHARACTERISTIC_UUID, hexMsg, true);
-        addMessage(text, 'me');
-        return;
-      }
-
-      console.log('No connection — cannot send voice message');
+      await sendHexFramed(
+        hexMsg,
+        (packetHex) =>
+          writeCharacteristic(
+            connectedDeviceId!,
+            SERVICE_UUID,
+            RX_CHARACTERISTIC_UUID,
+            packetHex,
+            'write',
+          ),
+        (packetHex) =>
+          updateCharacteristicValue(SERVICE_UUID, TX_CHARACTERISTIC_UUID, packetHex, true),
+      );
+      addMessage(trimmed, 'me');
     } catch (error) {
       console.log('Voice send failed:', error);
     }
@@ -381,6 +653,9 @@ export default function BluetoothScreen() {
       setPeripheralCentralId(null);
       setMessages([]);
       setMessage('');
+      clearReassembly();
+      incomingTextTrackerRef.current.reset();
+      ttsRef.current.endStream();
     }
   };
 
@@ -596,6 +871,67 @@ export default function BluetoothScreen() {
               ))
             )}
           </ScrollView>
+
+          {/* Auto-speak (streaming TTS) control for incoming messages */}
+          <View
+            style={[
+              styles.ttsBar,
+              { backgroundColor: colors.surface, borderTopColor: colors.border },
+            ]}
+          >
+            <TouchableOpacity
+              style={[
+                styles.ttsToggle,
+                {
+                  backgroundColor: ttsEnabled
+                    ? colors.primary
+                    : colors.inputBackground,
+                },
+              ]}
+              onPress={() => setTtsEnabled(!ttsEnabled)}
+              activeOpacity={0.82}
+            >
+              <Ionicons
+                name={ttsEnabled ? 'volume-high' : 'volume-mute'}
+                size={16}
+                color={ttsEnabled ? '#FFFFFF' : colors.textSecondary}
+              />
+              <Text
+                style={[
+                  styles.ttsToggleText,
+                  { color: ttsEnabled ? '#FFFFFF' : colors.textSecondary },
+                ]}
+              >
+                {ttsEnabled ? 'Auto-speak ON' : 'Auto-speak OFF'}
+              </Text>
+            </TouchableOpacity>
+
+            {!ttsReady && ttsEnabled ? (
+              <Text style={[styles.ttsStatus, { color: colors.textSecondary }]}>
+                Loading voice…
+              </Text>
+            ) : ttsSpeaking ? (
+              <Text style={[styles.ttsStatus, { color: colors.primary }]}>
+                🔊 Speaking…
+              </Text>
+            ) : null}
+
+            {ttsSpeaking && (
+              <TouchableOpacity
+                style={[
+                  styles.ttsStop,
+                  { backgroundColor: colors.inputBackground },
+                ]}
+                onPress={stopTts}
+                activeOpacity={0.82}
+              >
+                <Ionicons name="stop" size={16} color={colors.error} />
+                <Text style={[styles.ttsStopText, { color: colors.error }]}>
+                  Stop
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
 
           {/* Voice recording / transcribing indicator */}
           {(isVoiceRecording || isTranscribing) && (
@@ -1085,5 +1421,48 @@ const styles = StyleSheet.create({
   voiceErrorText: {
     fontSize: 12,
     fontWeight: '500',
+  },
+
+  ttsBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.sm + 4,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    gap: 8,
+  },
+
+  ttsToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: Radius.sm,
+  },
+
+  ttsToggleText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+
+  ttsStatus: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+
+  ttsStop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: Radius.sm,
+  },
+
+  ttsStopText: {
+    fontSize: 13,
+    fontWeight: '700',
   },
 });
