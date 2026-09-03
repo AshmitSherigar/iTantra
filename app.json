@@ -28,6 +28,7 @@
     },
     "plugins": [
       "expo-router",
+      "react-native-bluetooth-ble",
       [
         "expo-splash-screen",
         {

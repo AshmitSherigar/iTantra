@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
+  Linking,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -8,6 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import * as Device from 'expo-device';
 
 import { useVoiceMessage } from '../../features/audio/useVoiceMessage';
 import { useAutoSpeak } from '../../features/tts/useAutoSpeak';
@@ -21,6 +25,7 @@ import {
   isBluetoothEnabled,
   setServices,
   startAdvertising,
+  stopAdvertising,
   startScan,
   stopScan,
   addDeviceFoundListener,
@@ -80,6 +85,14 @@ export default function BluetoothScreen() {
   const [isScanning, setIsScanning] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [bluetoothReady, setBluetoothReady] = useState(false);
+  // User-visible BLE name. Prefilled from the OS device name so peers see a
+  // real name ("Rahul's Pixel") instead of the same "Bluetooth Chat" for all.
+  const [displayName, setDisplayName] = useState('');
+  const [advertisedName, setAdvertisedName] = useState<string | null>(null);
+  const [btError, setBtError] = useState<string | null>(null);
+  const [isStartingBt, setIsStartingBt] = useState(false);
+  const advertisedNameRef = useRef<string | null>(null);
+  const startingRef = useRef(false);
 
   const {
     isRecording: isVoiceRecording,
@@ -141,6 +154,15 @@ export default function BluetoothScreen() {
     timer: ReturnType<typeof setTimeout> | null;
   }>({ id: null, total: 0, chunks: [], timer: null });
 
+  // Prefill an editable real device name (OS name -> model -> fallback).
+  useEffect(() => {
+    const fallback =
+      Device.deviceName?.trim() ||
+      Device.modelName?.trim() ||
+      (Platform.OS === 'ios' ? 'iPhone' : 'Android Phone');
+    setDisplayName((prev) => prev || fallback.slice(0, 20));
+  }, []);
+
   useEffect(() => {
     return () => {
       removeDeviceListenerRef.current?.();
@@ -150,6 +172,12 @@ export default function BluetoothScreen() {
       removePeripheralUnsubscribedListenerRef.current?.();
       const state = reassemblyRef.current;
       if (state.timer) clearTimeout(state.timer);
+      try {
+        stopScan();
+      } catch {}
+      try {
+        stopAdvertising();
+      } catch {}
     };
   }, []);
 
@@ -169,6 +197,65 @@ export default function BluetoothScreen() {
     console.log('Scan stopped');
   };
 
+  // BLE advertising payload is ~31 bytes. With a 128-bit service UUID there
+  // is only room for a short local name — longer names get truncated by
+  // the OS (especially iOS), so cap what we advertise.
+  const MAX_ADVERTISED_NAME_LEN = 18;
+  const getNameToAdvertise = (raw?: string): string => {
+    const base =
+      (raw ?? displayName).trim() ||
+      Device.deviceName?.trim() ||
+      Device.modelName?.trim() ||
+      'Phone';
+    return base.slice(0, MAX_ADVERTISED_NAME_LEN);
+  };
+
+  const getDeviceDisplayName = (device: any): string => {
+    const candidates = [
+      device?.name,
+      device?.localName,
+      device?.advertisingData?.completeLocalName,
+      device?.advertisingData?.shortenedLocalName,
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string') {
+        const trimmed = candidate.trim();
+        if (
+          trimmed.length > 0 &&
+          trimmed.toLowerCase() !== 'unknown' &&
+          trimmed.toLowerCase() !== 'null' &&
+          trimmed.toLowerCase() !== 'undefined'
+        ) {
+          return trimmed;
+        }
+      }
+    }
+    return 'Bluetooth Device';
+  };
+
+  const mergeScannedDevice = (prev: any, next: any) => {
+    // Prefer non-empty name fields so a later scan-response packet carrying
+    // the local name upgrades an earlier nameless discovery of the same id.
+    const merged: any = { ...prev, ...next };
+    for (const key of ['name', 'localName'] as const) {
+      const prevVal = typeof prev?.[key] === 'string' ? prev[key].trim() : '';
+      const nextVal = typeof next?.[key] === 'string' ? next[key].trim() : '';
+      merged[key] = nextVal || prevVal || undefined;
+    }
+    const prevAdv = prev?.advertisingData ?? {};
+    const nextAdv = next?.advertisingData ?? {};
+    merged.advertisingData = { ...prevAdv, ...nextAdv };
+    for (const key of ['completeLocalName', 'shortenedLocalName'] as const) {
+      const prevVal = typeof prevAdv?.[key] === 'string' ? prevAdv[key].trim() : '';
+      const nextVal = typeof nextAdv?.[key] === 'string' ? nextAdv[key].trim() : '';
+      if (nextVal) merged.advertisingData[key] = nextVal;
+      else if (prevVal) merged.advertisingData[key] = prevVal;
+    }
+    if (next?.rssi !== undefined) merged.rssi = next.rssi;
+    if (next?.serviceUUIDs !== undefined) merged.serviceUUIDs = next.serviceUUIDs;
+    return merged;
+  };
+
   const scanForDevices = async () => {
     if (isScanning) return;
     if (connectedDeviceId || peripheralCentralId) {
@@ -184,16 +271,60 @@ export default function BluetoothScreen() {
     }
 
     removeDeviceListenerRef.current = addDeviceFoundListener((device) => {
-      console.log('Device found:', device);
+      console.log('Device found:', JSON.stringify(device));
       setDevices((currentDevices) => {
-        const exists = currentDevices.some((d) => d.id === device.id);
-        if (exists) return currentDevices;
+        const byId = currentDevices.findIndex((d) => d.id === device.id);
+        if (byId !== -1) {
+          // allowDuplicates delivers the same id again, often with the local
+          // name filled in on the second callback — merge instead of dropping.
+          const updated = [...currentDevices];
+          updated[byId] = mergeScannedDevice(currentDevices[byId], device);
+          return updated;
+        }
+        // BLE privacy: Android/iOS rotate the advertised MAC/UUID, so tapping
+        // "Start Bluetooth" again on the peer shows up as a NEW id with the
+        // SAME name. Collapse those instead of listing the phone N times.
+        const incomingName = getDeviceDisplayName(device);
+        if (incomingName !== 'Bluetooth Device') {
+          const byName = currentDevices.findIndex(
+            (d) => getDeviceDisplayName(d) === incomingName,
+          );
+          if (byName !== -1) {
+            console.log(
+              `Address rotated for "${incomingName}": ${currentDevices[byName].id} -> ${device.id}`,
+            );
+            const updated = [...currentDevices];
+            updated[byName] = mergeScannedDevice(
+              { ...currentDevices[byName], id: device.id },
+              device,
+            );
+            updated[byName].id = device.id;
+            return updated;
+          }
+        }
+        // Cap growth in crowded areas.
+        if (currentDevices.length >= 50) return currentDevices;
         return [...currentDevices, device];
       });
     });
 
     console.log('Starting scan...');
-    await startScan({ allowDuplicates: false, scanMode: 'balanced' });
+    // Filter by our chat service so random nameless BLE peripherals
+    // (TVs, watches, beacons) don't fill the list. allowDuplicates must be
+    // true: the first callback for a peer often has no name yet and the
+    // scan-response carrying the local name arrives right after.
+    try {
+      await startScan({
+        serviceUUIDs: [SERVICE_UUID],
+        allowDuplicates: true,
+        scanMode: 'lowLatency',
+      });
+    } catch (e) {
+      // Fall back to an unfiltered scan if the device rejects the filter
+      // (some Android stacks do) — names still resolve via merge logic.
+      console.log('Filtered scan failed, retrying unfiltered:', e);
+      await startScan({ allowDuplicates: true, scanMode: 'lowLatency' });
+    }
     setIsScanning(true);
     console.log('Scan started');
   };
@@ -608,14 +739,65 @@ export default function BluetoothScreen() {
     }
   };
 
+  const stopBluetooth = () => {
+    try {
+      stopAdvertising();
+    } catch (error) {
+      console.log('Stop advertising error:', error);
+    }
+    advertisedNameRef.current = null;
+    setAdvertisedName(null);
+    setBluetoothReady(false);
+    console.log('BLUETOOTH STOPPED');
+  };
+
   const checkBluetooth = async () => {
+    // Guard double-taps: restarting advertising generates a NEW random
+    // private BLE address, which is why the peer saw you "multiple times
+    // with changed bluetooth address".
+    if (startingRef.current || isStartingBt) return;
+    const nameToAdvertise = getNameToAdvertise();
+    if (bluetoothReady && advertisedNameRef.current === nameToAdvertise) {
+      console.log('Already advertising as', nameToAdvertise);
+      return;
+    }
+    // Name changed -> restart with the new name instead of stacking a second
+    // advertiser.
+    if (bluetoothReady) {
+      console.log('Name changed, restarting advertising as', nameToAdvertise);
+      stopBluetooth();
+    }
+
+    startingRef.current = true;
+    setIsStartingBt(true);
+    setBtError(null);
     try {
       console.log('BLUETOOTH START');
       const granted = await requestBluetoothPermission();
-      if (!granted) { console.log('Permission denied'); return; }
+      if (!granted) {
+        const msg = 'Bluetooth permission denied. Allow Bluetooth + Location to advertise and scan.';
+        setBtError(msg);
+        console.log('Permission denied');
+        return;
+      }
 
       const enabled = await isBluetoothEnabled();
-      if (!enabled) { console.log('Bluetooth disabled'); return; }
+      if (!enabled) {
+        // The library cannot turn on system Bluetooth itself (Android/iOS
+        // require user consent) — guide the user to Settings instead.
+        const msg = 'Bluetooth is turned off. Turn it on in system settings, then tap Start again.';
+        setBtError(msg);
+        console.log('Bluetooth disabled');
+        Alert.alert(
+          'Bluetooth is off',
+          'This app cannot switch system Bluetooth on by itself. Please turn Bluetooth on, then tap Start Bluetooth again.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings() },
+          ],
+        );
+        return;
+      }
 
       await setServices([
         {
@@ -628,12 +810,27 @@ export default function BluetoothScreen() {
       ]);
 
       setupPeripheralListeners();
-      startAdvertising({ serviceUUIDs: [SERVICE_UUID], localName: 'Bluetooth Chat' });
+      // Advertise the user's real name (not a fixed "Bluetooth Chat" for every
+      // phone) twice — localName + advertisingData — for max cross-platform
+      // visibility: Android puts it in the scan response, iOS only exposes
+      // local name + service UUIDs.
+      startAdvertising({
+        serviceUUIDs: [SERVICE_UUID],
+        localName: nameToAdvertise,
+        advertisingData: { completeLocalName: nameToAdvertise } as any,
+      });
 
+      advertisedNameRef.current = nameToAdvertise;
+      setAdvertisedName(nameToAdvertise);
       setBluetoothReady(true);
-      console.log('BLUETOOTH READY');
+      console.log('BLUETOOTH READY as', nameToAdvertise);
     } catch (error) {
+      const msg = 'Bluetooth setup failed. Make sure Bluetooth is on and try again.';
+      setBtError(msg);
       console.log('Bluetooth setup failed:', error);
+    } finally {
+      startingRef.current = false;
+      setIsStartingBt(false);
     }
   };
 
@@ -699,16 +896,73 @@ export default function BluetoothScreen() {
           <View style={styles.section}>
             <Text style={[styles.sectionTitle, { color: colors.text }]}>Setup</Text>
             <Text style={[styles.sectionDescription, { color: colors.textSecondary }]}>
-              Start Bluetooth to advertise this device, then scan for another Bluetooth Chat device nearby.
+              Set the name other phones will see, then start Bluetooth to advertise. Tap Start only once — tapping again changes your BLE address and you appear as a duplicate.
             </Text>
+            <Text style={[styles.nameLabel, { color: colors.textSecondary }]}>
+              YOUR DEVICE NAME (max {MAX_ADVERTISED_NAME_LEN} chars for BLE)
+            </Text>
+            <TextInput
+              value={displayName}
+              onChangeText={(t) => setDisplayName(t.slice(0, 20))}
+              placeholder={Device.modelName ?? 'e.g. Rahul'}
+              placeholderTextColor={colors.textSecondary}
+              maxLength={20}
+              style={[
+                styles.nameInput,
+                { backgroundColor: colors.inputBackground, color: colors.text },
+              ]}
+            />
+            {bluetoothReady && advertisedName ? (
+              <Text style={[styles.advertisedAs, { color: colors.success }]}>
+                You are visible as “{advertisedName}”
+              </Text>
+            ) : null}
+            {btError ? (
+              <View style={styles.btErrorBox}>
+                <Text style={[styles.btErrorText, { color: colors.error }]}>{btError}</Text>
+                <TouchableOpacity onPress={() => Linking.openSettings()} activeOpacity={0.8}>
+                  <Text style={[styles.btErrorLink, { color: colors.primary }]}>
+                    Open system settings
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
             <TouchableOpacity
-              style={[styles.primaryButton, { backgroundColor: colors.primary }]}
+              style={[
+                styles.primaryButton,
+                {
+                  backgroundColor: isStartingBt ? colors.textSecondary : colors.primary,
+                  opacity: isStartingBt ? 0.7 : 1,
+                },
+              ]}
               onPress={checkBluetooth}
+              disabled={isStartingBt}
               activeOpacity={0.82}
             >
-              <Ionicons name="bluetooth" size={18} color="#FFFFFF" style={styles.buttonIcon} />
-              <Text style={styles.primaryButtonText}>Start Bluetooth</Text>
+              {isStartingBt ? (
+                <ActivityIndicator color="#FFFFFF" size="small" style={styles.buttonIcon} />
+              ) : (
+                <Ionicons name="bluetooth" size={18} color="#FFFFFF" style={styles.buttonIcon} />
+              )}
+              <Text style={styles.primaryButtonText}>
+                {isStartingBt
+                  ? 'Starting…'
+                  : bluetoothReady
+                    ? `Update name & restart (“${advertisedName}”)`
+                    : 'Start Bluetooth'}
+              </Text>
             </TouchableOpacity>
+            {bluetoothReady ? (
+              <TouchableOpacity
+                style={[styles.stopButton, { backgroundColor: colors.inputBackground }]}
+                onPress={stopBluetooth}
+                activeOpacity={0.82}
+              >
+                <Text style={[styles.stopButtonText, { color: colors.text }]}>
+                  Stop advertising
+                </Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
 
           <View style={styles.section}>
@@ -759,7 +1013,7 @@ export default function BluetoothScreen() {
                   >
                     <View style={styles.deviceInfo}>
                       <Text style={[styles.deviceName, { color: colors.text }]} numberOfLines={1}>
-                        {device.name || device.localName || 'Bluetooth Device'}
+                        {getDeviceDisplayName(device)}
                       </Text>
                       <Text style={[styles.deviceId, { color: colors.textSecondary }]}>
                         {device.id}
@@ -1152,6 +1406,56 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: FontSize.body,
     fontWeight: '700',
+  },
+
+  nameLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    marginBottom: 6,
+  },
+
+  nameInput: {
+    height: 48,
+    borderRadius: Radius.md,
+    paddingHorizontal: 14,
+    fontSize: 15,
+    marginBottom: 8,
+  },
+
+  advertisedAs: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+
+  btErrorBox: {
+    marginBottom: 10,
+    gap: 4,
+  },
+
+  btErrorText: {
+    fontSize: 13,
+    fontWeight: '600',
+    lineHeight: 18,
+  },
+
+  btErrorLink: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+
+  stopButton: {
+    height: 44,
+    borderRadius: Radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+
+  stopButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
   },
 
   scanButton: {
