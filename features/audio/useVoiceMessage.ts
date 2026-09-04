@@ -17,6 +17,14 @@ export type UseVoiceMessageReturn = {
   partialText: string;
   /** Last error message, if any. */
   error: string | null;
+  /** STT model loaded and ready (loaded lazily after BLE connect to save RAM). */
+  sttReady: boolean;
+  /** STT model is currently loading. */
+  sttLoading: boolean;
+  /** Last STT init/runtime error, if any. */
+  sttError: string | null;
+  /** Last successfully transcribed text (also returned by stopVoice). */
+  lastTranscript: string;
   /** Start recording the user's voice. */
   startVoice: () => Promise<void>;
   /**
@@ -24,16 +32,28 @@ export type UseVoiceMessageReturn = {
    * Returns `null` when transcription fails or produces no output.
    */
   stopVoice: () => Promise<string | null>;
+  /** Preload the STT model (call when BLE devices connect). Idempotent. */
+  ensureSttReady: () => Promise<void>;
+  /** Free STT native memory (call on BLE disconnect). */
+  releaseStt: () => Promise<void>;
 };
 
 /**
  * Hook that captures microphone audio via Sherpa ONNX's native PCM live stream
  * and performs offline STT using the IndicConformer model.
+ *
+ * The STT model (~200MB) is NOT loaded here — call `ensureSttReady()` after
+ * the two BLE devices connect, and `releaseStt()` on disconnect, so RAM is
+ * only held while a chat peer exists.
  */
 export function useVoiceMessage(): UseVoiceMessageReturn {
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sttReady, setSttReady] = useState(sttEngine.isInitialized());
+  const [sttLoading, setSttLoading] = useState(false);
+  const [sttError, setSttError] = useState<string | null>(null);
+  const [lastTranscript, setLastTranscript] = useState('');
   const partialText = ''; // Offline model doesn't support partial results
 
   const micRef = useRef<PcmLiveStreamHandle | null>(null);
@@ -44,6 +64,18 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
   const audioChunksRef = useRef<Float32Array[]>([]);
   const totalSamplesRef = useRef(0);
 
+  // Terminal-only logging (Metro/Logcat). Nothing is rendered in-app.
+  const pushLog = useCallback((line: string) => {
+    console.log(line);
+  }, []);
+
+  const refreshSttState = useCallback(() => {
+    const s = sttEngine.getStatus();
+    setSttReady(s.isInitialized);
+    setSttLoading(s.isInitializing);
+    setSttError(s.lastError);
+  }, []);
+
   // Clean up on unmount
   useEffect(() => {
     return () => {
@@ -52,6 +84,38 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
       micRef.current?.stop().catch(() => {});
     };
   }, []);
+
+  const ensureSttReady = useCallback(async () => {
+    if (Platform.OS === 'web') return;
+    if (sttEngine.isInitialized()) {
+      refreshSttState();
+      return;
+    }
+    setSttLoading(true);
+    setSttError(null);
+    pushLog('[STT] Loading speech model (after BLE connect)…');
+    try {
+      await sttEngine.ensureInitialized();
+      pushLog('[STT] Speech model ready.');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      pushLog(`[STT] Model load FAILED: ${msg}`);
+      setSttError(msg);
+    } finally {
+      refreshSttState();
+    }
+  }, [pushLog, refreshSttState]);
+
+  const releaseStt = useCallback(async () => {
+    try {
+      await sttEngine.release();
+      pushLog('[STT] Speech model released (RAM freed).');
+    } catch {
+      // ignore
+    } finally {
+      refreshSttState();
+    }
+  }, [pushLog, refreshSttState]);
 
   const startVoice = useCallback(async () => {
     if (Platform.OS === 'web') {
@@ -90,14 +154,14 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
       // 4. Start capture
       await mic.start();
       setIsRecording(true);
-      console.log('[useVoiceMessage] Recording started');
+      pushLog('[Mic] Recording started…');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error('[useVoiceMessage] startVoice failed:', msg);
       setError(msg);
       setIsRecording(false);
     }
-  }, []);
+  }, [pushLog]);
 
   const stopVoice = useCallback(async (): Promise<string | null> => {
     setError(null);
@@ -129,30 +193,61 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
       // Convert Float32Array to number[] for the bridge
       const samplesArray = Array.from(allSamples);
 
-      console.log(`[useVoiceMessage] Captured ${samplesArray.length} samples. Starting transcription...`);
+      pushLog(
+        `[STT] Captured ${samplesArray.length} samples (${(samplesArray.length / 16000).toFixed(1)}s). Transcribing…`
+      );
 
-      // 3. Transcribe using the offline engine
+      // 3. Transcribe using the offline engine (lazy-loads model if needed)
+      if (!sttEngine.isInitialized()) {
+        pushLog('[STT] Model not loaded yet — loading now (first use)…');
+        setSttLoading(true);
+        try {
+          await sttEngine.ensureInitialized();
+          pushLog('[STT] Speech model ready.');
+        } finally {
+          refreshSttState();
+        }
+      }
       const text = await sttEngine.transcribeSamples(samplesArray, 16000);
       
       const finalText = text.trim();
       if (!finalText) {
-        setError('No speech detected.');
+        const msg = 'No speech detected.';
+        pushLog(`[STT] Result: EMPTY — ${msg}`);
+        setError(msg);
         return null;
       }
 
-      console.log('[useVoiceMessage] Final transcription:', finalText);
+      pushLog(`[STT] Result (${finalText.length} chars): "${finalText}"`);
+      setLastTranscript(finalText);
+      refreshSttState();
       return finalText;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error('[useVoiceMessage] stopVoice failed:', msg);
+      pushLog(`[STT] Transcription FAILED: ${msg}`);
       setError(`Transcription failed: ${msg}`);
+      refreshSttState();
       return null;
     } finally {
       setIsTranscribing(false);
       audioChunksRef.current = [];
       totalSamplesRef.current = 0;
     }
-  }, []);
+  }, [pushLog, refreshSttState]);
 
-  return { isRecording, isTranscribing, partialText, error, startVoice, stopVoice };
+  return {
+    isRecording,
+    isTranscribing,
+    partialText,
+    error,
+    sttReady,
+    sttLoading,
+    sttError,
+    lastTranscript,
+    startVoice,
+    stopVoice,
+    ensureSttReady,
+    releaseStt,
+  };
 }

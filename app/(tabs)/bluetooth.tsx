@@ -99,22 +99,34 @@ export default function BluetoothScreen() {
     isTranscribing,
     partialText,
     error: voiceError,
+    sttReady,
+    sttLoading,
+    sttError,
     startVoice,
     stopVoice,
+    ensureSttReady,
+    releaseStt,
   } = useVoiceMessage();
 
   // Auto-speak incoming messages via streaming Hindi TTS.
+  // autoInit:false — the ~114MB VITS model loads only after the two devices
+  // connect (see connection effect below), so idle RAM stays low. Same for
+  // the ~200MB STT model via ensureSttReady/releaseStt.
   const {
     enabled: ttsEnabled,
     setEnabled: setTtsEnabled,
     isReady: ttsReady,
+    isLoading: ttsLoading,
+    error: ttsError,
     isSpeaking: ttsSpeaking,
     stop: stopTts,
     speakFullMessage,
     beginStream: ttsBeginStream,
     pushStreamText: ttsPushText,
     endStream: ttsEndStream,
-  } = useAutoSpeak(true);
+    ensureReady: ensureTtsReady,
+    release: releaseTts,
+  } = useAutoSpeak(true, { autoInit: false });
 
   // Latest TTS callbacks for use inside BLE event listeners (which are
   // registered once per connection and would otherwise capture stale closures).
@@ -132,6 +144,30 @@ export default function BluetoothScreen() {
       endStream: ttsEndStream,
     };
   }, [speakFullMessage, ttsBeginStream, ttsPushText, ttsEndStream]);
+
+  // Heavy-model lifecycle: STT (~200MB) + TTS (~114MB) load only after the
+  // two devices connect, and are destroyed on disconnect so RAM is freed.
+  // This keeps idle usage near zero and stays safe as more STT languages
+  // are added (only the active model ever resides in RAM — see stt-engine).
+  const wasConnectedRef = useRef(false);
+  useEffect(() => {
+    const connected = connectedDeviceId !== null || peripheralCentralId !== null;
+    if (connected && !wasConnectedRef.current) {
+      wasConnectedRef.current = true;
+      console.log('[Models] Peer connected — loading STT + TTS models…');
+      void ensureSttReady();
+      void ensureTtsReady();
+    } else if (!connected && wasConnectedRef.current) {
+      wasConnectedRef.current = false;
+      console.log('[Models] Peer disconnected — releasing STT + TTS models…');
+      try {
+        stopTts();
+      } catch {}
+      ttsRef.current.endStream();
+      void releaseStt();
+      void releaseTts();
+    }
+  }, [connectedDeviceId, peripheralCentralId, ensureSttReady, ensureTtsReady, releaseStt, releaseTts, stopTts]);
 
   // Tracks decode progress of the in-flight chunked message so each newly
   // completed slice of text is pushed to streaming TTS exactly once —
@@ -1162,7 +1198,7 @@ export default function BluetoothScreen() {
 
             {!ttsReady && ttsEnabled ? (
               <Text style={[styles.ttsStatus, { color: colors.textSecondary }]}>
-                Loading voice…
+                {ttsLoading ? 'Loading voice…' : ttsError ? `Voice failed: ${ttsError}` : 'Voice not loaded'}
               </Text>
             ) : ttsSpeaking ? (
               <Text style={[styles.ttsStatus, { color: colors.primary }]}>
@@ -1227,13 +1263,45 @@ export default function BluetoothScreen() {
           )}
 
           {/* Voice error message */}
-          {voiceError && !isVoiceRecording && !isTranscribing && (
+          {(voiceError || sttError) && !isVoiceRecording && !isTranscribing && (
             <View style={[styles.voiceErrorBar, { borderTopColor: colors.border }]}>
               <Text style={[styles.voiceErrorText, { color: colors.error }]}>
-                {voiceError}
+                {voiceError ?? `Speech model: ${sttError}`}
               </Text>
             </View>
           )}
+
+          {/* STT status (terminal holds the full logs) */}
+          <View
+            style={[
+              styles.sttBar,
+              { backgroundColor: colors.surface, borderTopColor: colors.border },
+            ]}
+          >
+            <View style={styles.sttStatusRow}>
+              <View
+                style={[
+                  styles.statusDotSmall,
+                  {
+                    backgroundColor: sttReady
+                      ? colors.success
+                      : sttLoading
+                        ? colors.primary
+                        : colors.textSecondary,
+                  },
+                ]}
+              />
+              <Text style={[styles.sttStatusText, { color: colors.textSecondary }]}>
+                {sttLoading
+                  ? 'Loading speech model…'
+                  : sttReady
+                    ? 'Speech model ready'
+                    : sttError
+                      ? `Speech model failed: ${sttError}`
+                      : 'Speech model not loaded'}
+              </Text>
+            </View>
+          </View>
 
           <View
             style={[
@@ -1768,5 +1836,29 @@ const styles = StyleSheet.create({
   ttsStopText: {
     fontSize: 13,
     fontWeight: '700',
+  },
+
+  sttBar: {
+    paddingHorizontal: Spacing.sm + 4,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+  },
+
+  sttStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+
+  statusDotSmall: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+
+  sttStatusText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '600',
   },
 });

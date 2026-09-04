@@ -8,6 +8,8 @@ export type AutoSpeakApi = {
   setEnabled: (v: boolean) => void;
   /** TTS engine ready (model loaded). */
   isReady: boolean;
+  /** TTS model is currently loading. */
+  isLoading: boolean;
   /** Currently synthesizing / playing. */
   isSpeaking: boolean;
   /** Last init / runtime error, if any. */
@@ -21,25 +23,78 @@ export type AutoSpeakApi = {
   /** Flush the tail of the streamed utterance. */
   endStream: () => void;
   stop: () => void;
+  /**
+   * Load the TTS model on demand (call when BLE devices connect).
+   * Idempotent — resolves immediately if already loaded.
+   */
+  ensureReady: () => Promise<void>;
+  /** Destroy the TTS engine to free native RAM (call on BLE disconnect). */
+  release: () => Promise<void>;
 };
 
 /**
  * Auto-speak controller for incoming BLE chat messages.
  *
- * - Lazily initializes the Hindi VITS streaming TTS engine once.
+ * RAM discipline: the Hindi VITS model (~114MB) is heavy. Pass
+ * `{ autoInit: false }` on the chat screen so nothing loads until the two
+ * devices connect — then call `ensureReady()` on connect and `release()`
+ * on disconnect. Test screens can keep the default `autoInit: true`.
+ *
  * - Polls engine status so `isSpeaking` stays fresh for the UI.
  * - All speak methods are safe no-ops on web / before init / when disabled.
  */
-export function useAutoSpeak(defaultEnabled = true): AutoSpeakApi {
+export function useAutoSpeak(
+  defaultEnabled = true,
+  opts?: { autoInit?: boolean }
+): AutoSpeakApi {
+  const autoInit = opts?.autoInit ?? true;
   const [enabled, setEnabled] = useState(defaultEnabled);
   const [isReady, setIsReady] = useState(hindiTTS.getStatus().isInitialized);
+  const [isLoading, setIsLoading] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
 
-  // One-time lazy init.
+  const ensureReady = useCallback(async () => {
+    if (Platform.OS === 'web') return;
+    if (hindiTTS.getStatus().isInitialized) {
+      setIsReady(true);
+      return;
+    }
+    setIsLoading(true);
+    setError(null);
+    console.log('[TTS] Loading voice model (after BLE connect)…');
+    try {
+      await hindiTTS.initialize({ debug: __DEV__ });
+      setIsReady(true);
+      setError(null);
+      console.log('[TTS] Voice model ready.');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[TTS] Model load failed:', msg);
+      setError(msg);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  const release = useCallback(async () => {
+    try {
+      await hindiTTS.destroy();
+      console.log('[TTS] Voice model released (RAM freed).');
+    } catch {
+      // ignore
+    } finally {
+      setIsReady(false);
+      setIsSpeaking(false);
+    }
+  }, []);
+
+  // One-time lazy init (skipped when autoInit is false — chat screen loads
+  // the model only after the two devices connect, to save RAM).
   useEffect(() => {
+    if (!autoInit) return;
     let cancelled = false;
     if (Platform.OS === 'web') return;
     if (hindiTTS.getStatus().isInitialized) {
@@ -47,6 +102,7 @@ export function useAutoSpeak(defaultEnabled = true): AutoSpeakApi {
       return;
     }
     (async () => {
+      setIsLoading(true);
       try {
         await hindiTTS.initialize({ debug: __DEV__ });
         if (!cancelled) {
@@ -57,12 +113,14 @@ export function useAutoSpeak(defaultEnabled = true): AutoSpeakApi {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : String(err));
         }
+      } finally {
+        if (!cancelled) setIsLoading(false);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [autoInit]);
 
   // Poll speaking state for UI.
   useEffect(() => {
@@ -135,6 +193,7 @@ export function useAutoSpeak(defaultEnabled = true): AutoSpeakApi {
     enabled,
     setEnabled: handleSetEnabled,
     isReady,
+    isLoading,
     isSpeaking,
     error,
     speakFullMessage,
@@ -142,5 +201,7 @@ export function useAutoSpeak(defaultEnabled = true): AutoSpeakApi {
     pushStreamText,
     endStream,
     stop,
+    ensureReady,
+    release,
   };
 }
