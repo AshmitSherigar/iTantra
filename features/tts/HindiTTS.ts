@@ -112,8 +112,12 @@ export function extractSpeakableChunks(buffer: string): {
 const DEFAULT_SID = 0;
 const DEFAULT_SPEED = 1.0;
 
+/** Default TTS asset dir (English). Kept in sync with features/models/languages.ts. */
+export const DEFAULT_TTS_MODEL_PATH = 'models/tts/tts-eng';
+
 class HindiTTS implements ITTSService {
   private engine: StreamingTtsEngine | null = null;
+  private activeModelPath: string | null = null;
   private currentStream: TtsStreamController | null = null;
   private status: TTSStatus = {
     isInitialized: false,
@@ -145,20 +149,33 @@ class HindiTTS implements ITTSService {
   private speed = DEFAULT_SPEED;
 
   async initialize(config?: HindiTTSConfig): Promise<void> {
-    if (this.status.isInitialized) {
-      if (config?.debug) console.log('[HindiTTS] Already initialized.');
+    const modelPath = config?.modelPath ?? DEFAULT_TTS_MODEL_PATH;
+
+    // Idempotent for the same language; switching languages frees the old
+    // native engine FIRST so peak RAM never holds two (~228MB would OOM).
+    if (this.status.isInitialized && this.activeModelPath === modelPath) {
+      if (config?.debug) console.log(`[VoiceTTS] Already initialized (${modelPath}).`);
       return;
+    }
+    if (this.status.isInitialized && this.activeModelPath !== modelPath) {
+      console.log(
+        `[VoiceTTS] Switching model ${this.activeModelPath} -> ${modelPath}: releasing old engine first`
+      );
+      await this.destroy();
     }
 
     try {
-      const modelPathConfig = { type: 'asset', path: 'models/tts' } as const;
+      const modelPathConfig = { type: 'asset', path: modelPath } as const;
 
       if (config?.debug) {
-        console.log('[HindiTTS] Detecting model...');
+        console.log('[VoiceTTS] Detecting model...');
         const detection = await detectTtsModel(modelPathConfig);
-        console.log('[HindiTTS] Detection result:', detection);
+        console.log('[VoiceTTS] Detection result:', detection);
       }
 
+      // Staged markers: a native kill preserves already-flushed logs, so the
+      // last visible marker pinpoints a native loader crash.
+      console.log(`[VoiceTTS] step=create (${modelPath})`);
       this.engine = await createStreamingTTS({
         modelPath: modelPathConfig,
         modelType: 'vits',
@@ -170,7 +187,9 @@ class HindiTTS implements ITTSService {
         debug: config?.debug ?? false,
       });
 
+      console.log(`[VoiceTTS] step=created (${modelPath}), reading model info…`);
       const { sampleRate, numSpeakers } = await this.engine.getModelInfo();
+      this.activeModelPath = modelPath;
       this.status = {
         isInitialized: true,
         isSpeaking: false,
@@ -180,12 +199,13 @@ class HindiTTS implements ITTSService {
       };
 
       if (config?.debug) {
-        console.log(`[HindiTTS] Initialized successfully. Sample Rate: ${sampleRate}, Speakers: ${numSpeakers}`);
+        console.log(`[VoiceTTS] Initialized successfully (${modelPath}). Sample Rate: ${sampleRate}, Speakers: ${numSpeakers}`);
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
+      this.activeModelPath = null;
       this.status.error = errorMsg;
-      if (config?.debug) console.error('[HindiTTS] Initialization failed:', errorMsg);
+      if (config?.debug) console.error('[VoiceTTS] Initialization failed:', errorMsg);
       throw err;
     }
   }
@@ -341,7 +361,7 @@ class HindiTTS implements ITTSService {
           try {
             await this.synthesizeOne(text);
           } catch (err) {
-            console.error('[HindiTTS] Synthesis failed for chunk:', err);
+            console.error('[VoiceTTS] Synthesis failed for chunk:', err);
             // Continue with the rest of the queue instead of stalling.
           }
         }
@@ -435,19 +455,19 @@ class HindiTTS implements ITTSService {
                 this.pcmWriteChain = this.pcmWriteChain
                   .then(() => engine.writePcmChunk(chunk.samples))
                   .catch((err) => {
-                    console.error('[HindiTTS] Error writing PCM chunk:', err);
+                    console.error('[VoiceTTS] Error writing PCM chunk:', err);
                   });
               },
               onEnd: () => done(),
               onError: (event) => {
-                console.error('[HindiTTS] Stream error:', event.message);
+                console.error('[VoiceTTS] Stream error:', event.message);
                 this.status.error = event.message;
                 done();
               },
             },
           );
         } catch (err) {
-          console.error('[HindiTTS] generateSpeechStream failed:', err);
+          console.error('[VoiceTTS] generateSpeechStream failed:', err);
           done();
         }
       })();
@@ -491,6 +511,10 @@ class HindiTTS implements ITTSService {
       await this.engine.destroy();
       this.engine = null;
     }
+    if (this.activeModelPath) {
+      console.log(`[VoiceTTS] Engine released (was ${this.activeModelPath}), RAM freed`);
+    }
+    this.activeModelPath = null;
     this.status = {
       isInitialized: false,
       isSpeaking: false,
@@ -500,6 +524,10 @@ class HindiTTS implements ITTSService {
 
   getStatus(): TTSStatus {
     return this.status;
+  }
+
+  getActiveModelPath(): string | null {
+    return this.activeModelPath;
   }
 }
 

@@ -9,9 +9,11 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { useTheme } from '../../context/ThemeContext';
+import { useLanguage } from '../../context/LanguageContext';
 
 export default function SettingsScreen() {
   const { colors } = useTheme() as any;
+  const { selectedLanguage } = useLanguage();
 
   return (
     <SafeAreaView
@@ -52,7 +54,7 @@ export default function SettingsScreen() {
                   { color: colors.textSecondary },
                 ]}
               >
-                Choose your preferred language
+                {selectedLanguage.label} • Choose your preferred language
               </Text>
             </View>
 

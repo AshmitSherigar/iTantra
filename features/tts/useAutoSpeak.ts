@@ -24,10 +24,11 @@ export type AutoSpeakApi = {
   endStream: () => void;
   stop: () => void;
   /**
-   * Load the TTS model on demand (call when BLE devices connect).
-   * Idempotent — resolves immediately if already loaded.
+   * Load the TTS model for one language on demand (call when BLE devices
+   * connect). Idempotent per path — pass the selected language's
+   * `ttsAssetPath` so ONLY that voice (~114MB) ever lives in RAM.
    */
-  ensureReady: () => Promise<void>;
+  ensureReady: (modelPath?: string) => Promise<void>;
   /** Destroy the TTS engine to free native RAM (call on BLE disconnect). */
   release: () => Promise<void>;
 };
@@ -56,17 +57,22 @@ export function useAutoSpeak(
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
 
-  const ensureReady = useCallback(async () => {
+  const ensureReady = useCallback(async (modelPath?: string) => {
     if (Platform.OS === 'web') return;
-    if (hindiTTS.getStatus().isInitialized) {
+    if (
+      hindiTTS.getStatus().isInitialized &&
+      (!modelPath || hindiTTS.getActiveModelPath() === modelPath)
+    ) {
       setIsReady(true);
       return;
     }
     setIsLoading(true);
     setError(null);
-    console.log('[TTS] Loading voice model (after BLE connect)…');
+    console.log(
+      `[TTS] Loading voice model ${modelPath ?? '(default)'} (after BLE connect)…`,
+    );
     try {
-      await hindiTTS.initialize({ debug: __DEV__ });
+      await hindiTTS.initialize({ debug: __DEV__, modelPath });
       setIsReady(true);
       setError(null);
       console.log('[TTS] Voice model ready.');

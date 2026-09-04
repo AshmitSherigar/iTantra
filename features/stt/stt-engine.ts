@@ -11,7 +11,10 @@ export type STTStatus = {
   lastError: string | null;
 };
 
-const DEFAULT_MODEL_PATH = 'models/indiconformer';
+const DEFAULT_MODEL_PATH = 'models/stt/stt-eng';
+
+/** Default STT asset dir (English). Kept in sync with features/models/languages.ts. */
+export const DEFAULT_STT_MODEL_PATH = DEFAULT_MODEL_PATH;
 
 /**
  * Singleton owner of the native STT recognizer.
@@ -45,6 +48,10 @@ export class STTEngine {
 
   isInitialized(): boolean {
     return this.stt != null;
+  }
+
+  getActiveModelPath(): string | null {
+    return this.activeModelPath;
   }
 
   getLastError(): string | null {

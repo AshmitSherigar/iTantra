@@ -40,6 +40,9 @@ import {
 } from 'react-native-bluetooth-ble';
 
 import { useTheme } from '../../context/ThemeContext';
+import { useLanguage } from '../../context/LanguageContext';
+import { isLanguageInstalled } from '../../features/models/languages';
+import { router } from 'expo-router';
 import { FontSize, Radius, Spacing } from '../../constants/theme';
 
 const SERVICE_UUID = '71f271d0-8f4c-4c4d-8a2d-6f3a9497b41d';
@@ -76,6 +79,7 @@ type ChatMessage = {
 
 export default function BluetoothScreen() {
   const { colors } = useTheme();
+  const { selectedLanguage } = useLanguage();
 
   const [devices, setDevices] = useState<any[]>([]);
   const [connectedDeviceId, setConnectedDeviceId] = useState<string | null>(null);
@@ -145,18 +149,68 @@ export default function BluetoothScreen() {
     };
   }, [speakFullMessage, ttsBeginStream, ttsPushText, ttsEndStream]);
 
+  // Prompt to install when the selected language has no bundled model.
+  // The Install button is intentionally a placeholder (download flow TBD).
+  const promptInstallLanguage = () => {
+    Alert.alert(
+      'Language model not installed',
+      `The "${selectedLanguage.label}" voice models aren't installed yet. Install it or switch to an installed language to connect.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Install',
+          onPress: () =>
+            Alert.alert(
+              'Install language model',
+              `"${selectedLanguage.label}" model download isn't available yet.`,
+              [{ text: 'OK' }],
+            ),
+        },
+        {
+          text: 'View Languages',
+          onPress: () => router.push('/settings/language'),
+        },
+      ],
+    );
+  };
+
   // Heavy-model lifecycle: STT (~200MB) + TTS (~114MB) load only after the
   // two devices connect, and are destroyed on disconnect so RAM is freed.
-  // This keeps idle usage near zero and stays safe as more STT languages
-  // are added (only the active model ever resides in RAM — see stt-engine).
+  // ONLY the selected language's models are initialized — never all of them
+  // (only one STT + one TTS model ever reside in RAM — see stt-engine).
   const wasConnectedRef = useRef(false);
   useEffect(() => {
     const connected = connectedDeviceId !== null || peripheralCentralId !== null;
     if (connected && !wasConnectedRef.current) {
       wasConnectedRef.current = true;
-      console.log('[Models] Peer connected — loading STT + TTS models…');
-      void ensureSttReady();
-      void ensureTtsReady();
+      if (!isLanguageInstalled(selectedLanguage)) {
+        console.log(
+          `[Models] Peer connected but "${selectedLanguage.label}" is not installed — skipping model load.`,
+        );
+        promptInstallLanguage();
+        return;
+      }
+      console.log(
+        `[Models] Peer connected — loading ${selectedLanguage.label} STT (${selectedLanguage.sttAssetPath}) + TTS (${selectedLanguage.ttsAssetPath})…`,
+      );
+      // SEQUENTIAL, not concurrent: ONNX model load transiently needs ~2x
+      // the model size (file buffer + graph + tensors). STT (~175MB) + TTS
+      // (~114MB) loading at once spikes past ~700MB and Android LMK-kills
+      // the process with no JS error — the silent death in the logs.
+      // Loading one, yielding, then the other keeps peak near ~500MB.
+      void (async () => {
+        try {
+          await ensureSttReady(selectedLanguage.sttAssetPath!);
+        } catch (e) {
+          console.warn('[Models] STT load failed, continuing to TTS:', e);
+        }
+        await new Promise((r) => setTimeout(r, 500));
+        try {
+          await ensureTtsReady(selectedLanguage.ttsAssetPath!);
+        } catch (e) {
+          console.warn('[Models] TTS load failed:', e);
+        }
+      })();
     } else if (!connected && wasConnectedRef.current) {
       wasConnectedRef.current = false;
       console.log('[Models] Peer disconnected — releasing STT + TTS models…');
@@ -167,7 +221,8 @@ export default function BluetoothScreen() {
       void releaseStt();
       void releaseTts();
     }
-  }, [connectedDeviceId, peripheralCentralId, ensureSttReady, ensureTtsReady, releaseStt, releaseTts, stopTts]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectedDeviceId, peripheralCentralId, selectedLanguage, ensureSttReady, ensureTtsReady, releaseStt, releaseTts, stopTts]);
 
   // Tracks decode progress of the in-flight chunked message so each newly
   // completed slice of text is pushed to streaming TTS exactly once —
@@ -589,6 +644,11 @@ export default function BluetoothScreen() {
 
   const connectToDevice = async (deviceId: string) => {
     if (isConnecting || connectedDeviceId || peripheralCentralId) return;
+    // Require the selected language's models before opening a chat.
+    if (!isLanguageInstalled(selectedLanguage)) {
+      promptInstallLanguage();
+      return;
+    }
     setIsConnecting(true);
 
     try {
@@ -763,15 +823,27 @@ export default function BluetoothScreen() {
 
   /** Toggle voice recording on/off.  On stop → transcribe → send. */
   const handleVoiceToggle = async () => {
-    if (isVoiceRecording) {
-      // Stop recording → transcribe → send
-      const text = await stopVoice();
-      if (text) {
-        await sendTextOverBLE(text);
+    if (!isVoiceRecording && !isLanguageInstalled(selectedLanguage)) {
+      promptInstallLanguage();
+      return;
+    }
+    try {
+      if (isVoiceRecording) {
+        // Stop recording → transcribe → send
+        const text = await stopVoice();
+        if (text) {
+          await sendTextOverBLE(text);
+        }
+      } else {
+        // Halt speaker playback first: avoids the mic picking up TTS output
+        // and avoids AudioTrack/AudioRecord contention on low-end devices.
+        try {
+          stopTts();
+        } catch {}
+        await startVoice();
       }
-    } else {
-      // Start recording
-      await startVoice();
+    } catch (e) {
+      console.warn('[Chat] Voice toggle failed:', e);
     }
   };
 
@@ -1002,6 +1074,48 @@ export default function BluetoothScreen() {
           </View>
 
           <View style={styles.section}>
+            <Text style={[styles.sectionTitle, { color: colors.text }]}>Language</Text>
+            <Text style={[styles.sectionDescription, { color: colors.textSecondary }]}>
+              Voice models for the selected language load when a chat opens. Only that language stays in memory.
+            </Text>
+            <View
+              style={[
+                styles.deviceCard,
+                { backgroundColor: colors.surface, borderColor: colors.border },
+              ]}
+            >
+              <View style={styles.deviceInfo}>
+                <Text style={[styles.deviceName, { color: colors.text }]}>
+                  {selectedLanguage.label}
+                </Text>
+                <Text style={[styles.deviceId, { color: colors.textSecondary }]}>
+                  {isLanguageInstalled(selectedLanguage)
+                    ? 'Installed • works offline'
+                    : 'Not installed'}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={[styles.connectButton, { backgroundColor: colors.primary }]}
+                onPress={() => router.push('/settings/language')}
+                activeOpacity={0.82}
+              >
+                <Text style={styles.connectButtonText}>Change</Text>
+              </TouchableOpacity>
+            </View>
+            {!isLanguageInstalled(selectedLanguage) ? (
+              <TouchableOpacity
+                style={[styles.stopButton, { backgroundColor: colors.inputBackground, marginTop: 8 }]}
+                onPress={promptInstallLanguage}
+                activeOpacity={0.82}
+              >
+                <Text style={[styles.stopButtonText, { color: colors.text }]}>
+                  Install “{selectedLanguage.label}” models
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+
+          <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <View>
                 <Text style={[styles.sectionTitle, { color: colors.text }]}>Nearby Devices</Text>
@@ -1092,7 +1206,7 @@ export default function BluetoothScreen() {
               <View>
                 <Text style={[styles.connectedTitle, { color: colors.text }]}>Connected</Text>
                 <Text style={[styles.connectedRole, { color: colors.textSecondary }]}>
-                  {connectedDeviceId ? 'Central (scanner)' : 'Peripheral (advertiser)'}
+                  {connectedDeviceId ? 'Central (scanner)' : 'Peripheral (advertiser)'} • {selectedLanguage.label}
                 </Text>
               </View>
             </View>
@@ -1293,9 +1407,9 @@ export default function BluetoothScreen() {
               />
               <Text style={[styles.sttStatusText, { color: colors.textSecondary }]}>
                 {sttLoading
-                  ? 'Loading speech model…'
+                  ? `Loading ${selectedLanguage.label} speech model…`
                   : sttReady
-                    ? 'Speech model ready'
+                    ? `${selectedLanguage.label} speech model ready`
                     : sttError
                       ? `Speech model failed: ${sttError}`
                       : 'Speech model not loaded'}

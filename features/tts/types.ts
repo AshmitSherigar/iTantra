@@ -1,6 +1,12 @@
 export interface HindiTTSConfig {
   /** Should provide useful logging in __DEV__ */
   debug?: boolean;
+  /**
+   * Asset dir for the voice model (e.g. 'models/tts/tts-eng').
+   * Defaults to English. Pass the selected language's `ttsAssetPath`
+   * so only that language's (~114MB) model ever lives in RAM.
+   */
+  modelPath?: string;
 }
 
 export interface TTSStatus {
