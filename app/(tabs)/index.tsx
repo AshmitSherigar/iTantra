@@ -1,35 +1,139 @@
-import { useState } from 'react';
-import { StyleSheet, Text, View, Pressable } from 'react-native';
+import { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { router } from 'expo-router';
 
-import Header from '@/components/Header';
 import RecordButton from '@/components/RecordButton';
 import TranscriptBox from '@/components/TranscriptBox';
 import StatusIndicator from '@/components/StatusIndicator';
 
 import { useTheme } from '../../context/ThemeContext';
+import { useLanguage } from '../../context/LanguageContext';
+import { isLanguageInstalled } from '../../features/models/languages';
+import { useVoiceMessage } from '../../features/audio/useVoiceMessage';
 import { FontSize, Radius, Spacing } from '../../constants/theme';
 
 export default function Index() {
   const { colors } = useTheme();
+  const { selectedLanguage } = useLanguage();
 
   const [transcript, setTranscript] = useState('');
-  const [status, setStatus] = useState<
-    'ready' | 'listening' | 'processing' | 'error'
-  >('ready');
 
-  const isRecording = status === 'listening';
+  const {
+    isRecording,
+    isTranscribing,
+    error: voiceError,
+    sttReady,
+    sttLoading,
+    sttError,
+    startVoice,
+    stopVoice,
+    ensureSttReady,
+  } = useVoiceMessage();
 
-  function handleRecording() {
-    if (status === 'ready') {
-      setStatus('listening');
-      setTranscript('Listening...');
-    } else if (status === 'listening') {
-      setStatus('processing');
-      setTranscript('Processing your speech...');
-    }
+  const languageInstalled = isLanguageInstalled(selectedLanguage);
+  const sttModelPath = selectedLanguage.sttAssetPath;
+
+  // Preload the selected language's STT model so the mic is low-latency.
+  // Idempotent: STTEngine keeps only one model in RAM and no-ops when the
+  // requested path is already loaded.
+  useEffect(() => {
+    if (!languageInstalled || !sttModelPath) return;
+    void ensureSttReady(sttModelPath);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sttModelPath, languageInstalled]);
+
+  const status: 'ready' | 'listening' | 'processing' | 'error' =
+    isRecording
+      ? 'listening'
+      : isTranscribing || sttLoading
+        ? 'processing'
+        : voiceError || sttError
+          ? 'error'
+          : 'ready';
+
+  function promptInstallLanguage() {
+    Alert.alert(
+      'Language model not installed',
+      `The "${selectedLanguage.label}" voice models aren't installed yet. Install it or switch to an installed language to use the microphone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Install',
+          onPress: () =>
+            Alert.alert(
+              'Install language model',
+              `"${selectedLanguage.label}" model download isn't available yet.`,
+              [{ text: 'OK' }],
+            ),
+        },
+        {
+          text: 'View Languages',
+          onPress: () => router.push('/settings/language'),
+        },
+      ],
+    );
   }
+
+  async function handleRecording() {
+    // Stop -> transcribe with the selected language's STT model.
+    if (isRecording) {
+      const text = await stopVoice();
+      if (text) {
+        setTranscript(text);
+      }
+      // On failure / empty result, voiceError explains it below —
+      // keep whatever the user already typed.
+      return;
+    }
+
+    if (isTranscribing || sttLoading) return;
+
+    if (!languageInstalled || !sttModelPath) {
+      promptInstallLanguage();
+      return;
+    }
+
+    // Make sure the STT engine holds THIS language (switches + frees the
+    // previous ~200MB model when the user changed language in Settings).
+    setTranscript('');
+    await ensureSttReady(sttModelPath);
+    await startVoice();
+  }
+
+  function handleBroadcast() {
+    const message = transcript.trim();
+    if (!message) return;
+    // TODO: broadcast `message` (+ selectedLanguage.id) to the Bluetooth mesh.
+    console.log(
+      `[Broadcast] mesh send (${selectedLanguage.id}): "${message}"`,
+    );
+    Alert.alert(
+      'Broadcast',
+      'Bluetooth mesh broadcast will be implemented later.',
+      [{ text: 'OK' }],
+    );
+  }
+
+  const canBroadcast = transcript.trim().length > 0 && !isRecording && !isTranscribing;
+
+  const sttStatusLine = !languageInstalled
+    ? `${selectedLanguage.label} • model not installed`
+    : sttLoading
+      ? `${selectedLanguage.label} • loading speech model…`
+      : sttError
+        ? `${selectedLanguage.label} • model failed: ${sttError}`
+        : sttReady
+          ? `${selectedLanguage.label} • speech model ready`
+          : `${selectedLanguage.label} • tap mic to load model`;
 
   return (
     <SafeAreaView
@@ -90,7 +194,72 @@ export default function Index() {
           </View>
         </View>
 
-        <TranscriptBox transcript={transcript} />
+        <TranscriptBox
+          transcript={transcript}
+          onChangeText={setTranscript}
+          editable
+          placeholder={
+            isRecording
+              ? 'Listening… speak now'
+              : `Tap the mic and speak in ${selectedLanguage.label}…`
+          }
+        />
+
+        <Text style={[styles.languageLine, { color: colors.textSecondary }]}>
+          {sttStatusLine}
+        </Text>
+
+        {!languageInstalled ? (
+          <Pressable
+            onPress={promptInstallLanguage}
+            style={[styles.installBanner, { backgroundColor: colors.surface }]}
+          >
+            <Ionicons
+              name="download-outline"
+              size={16}
+              color={colors.primary}
+            />
+            <Text style={[styles.installText, { color: colors.primary }]}>
+              Install “{selectedLanguage.label}” models to enable the mic
+            </Text>
+          </Pressable>
+        ) : null}
+
+        {voiceError || sttError ? (
+          !isRecording && !isTranscribing ? (
+            <Text style={[styles.errorLine, { color: colors.error }]}>
+              {voiceError ?? `Speech model: ${sttError}`}
+            </Text>
+          ) : null
+        ) : null}
+
+        {/* Broadcast to Bluetooth mesh (implementation later) */}
+        <Pressable
+          onPress={handleBroadcast}
+          disabled={!canBroadcast}
+          style={({ pressed }) => [
+            styles.broadcastButton,
+            {
+              backgroundColor: canBroadcast ? colors.primary : colors.surface,
+              borderColor: colors.border,
+              opacity: !canBroadcast ? 0.6 : pressed ? 0.85 : 1,
+            },
+          ]}
+        >
+          <Ionicons
+            name="megaphone-outline"
+            size={18}
+            color={canBroadcast ? '#FFFFFF' : colors.textSecondary}
+          />
+          <Text
+            style={[
+              styles.broadcastText,
+              { color: canBroadcast ? '#FFFFFF' : colors.textSecondary },
+            ]}
+          >
+            Broadcast
+          </Text>
+        </Pressable>
       </View>
 
       {/* Recording Area */}
@@ -104,16 +273,33 @@ export default function Index() {
         ]}
       >
         <Text style={[styles.recordTitle, { color: colors.text }]}>
-          {isRecording ? 'Listening to you...' : 'Tap to start speaking'}
+          {isRecording
+            ? `Listening in ${selectedLanguage.label}...`
+            : isTranscribing || sttLoading
+              ? 'Working...'
+              : 'Tap to start speaking'}
         </Text>
 
         <Text style={[styles.recordSubtitle, { color: colors.textSecondary }]}>
           {isRecording
             ? 'Tap the button when you are finished'
-            : 'Your speech will appear above'}
+            : sttLoading
+              ? `Loading ${selectedLanguage.label} speech model…`
+              : 'Your speech will appear above'}
         </Text>
 
         <RecordButton isRecording={isRecording} onPress={handleRecording} />
+
+        {sttLoading && !isRecording ? (
+          <View style={styles.loadingRow}>
+            <ActivityIndicator size="small" color={colors.primary} />
+            <Text
+              style={[styles.loadingText, { color: colors.textSecondary }]}
+            >
+              Loading speech model…
+            </Text>
+          </View>
+        ) : null}
 
         <StatusIndicator status={status} />
       </View>
@@ -203,6 +389,48 @@ const styles = StyleSheet.create({
     letterSpacing: 0.7,
   },
 
+  languageLine: {
+    marginTop: Spacing.sm,
+    fontSize: 12,
+  },
+
+  installBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    borderRadius: Radius.md,
+  },
+
+  installText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+
+  errorLine: {
+    marginTop: Spacing.sm,
+    fontSize: 13,
+  },
+
+  broadcastButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: Spacing.sm,
+    paddingVertical: 13,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+  },
+
+  broadcastText: {
+    fontSize: FontSize.medium,
+    fontWeight: '700',
+  },
+
   recordingCard: {
     alignItems: 'center',
     paddingVertical: Spacing.md,
@@ -221,6 +449,17 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontSize: FontSize.small,
     textAlign: 'center',
+  },
+
+  loadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: Spacing.sm,
+  },
+
+  loadingText: {
+    fontSize: 13,
   },
 
   footer: {

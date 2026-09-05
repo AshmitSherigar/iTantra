@@ -1,4 +1,4 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { FontSize, Radius, Spacing } from '../constants/theme';
 
@@ -6,12 +6,22 @@ import { useTheme } from '../context/ThemeContext';
 
 type TranscriptBoxProps = {
   transcript: string;
+  /** When provided with `editable`, the box becomes an editable textbox. */
+  onChangeText?: (text: string) => void;
+  editable?: boolean;
+  placeholder?: string;
 };
 
-export default function TranscriptBox({ transcript }: TranscriptBoxProps) {
+export default function TranscriptBox({
+  transcript,
+  onChangeText,
+  editable = false,
+  placeholder,
+}: TranscriptBoxProps) {
   const { colors } = useTheme() as any;
 
   const hasTranscript = transcript.length > 0;
+  const isEditable = editable && typeof onChangeText === 'function';
 
   return (
     <View
@@ -27,9 +37,21 @@ export default function TranscriptBox({ transcript }: TranscriptBoxProps) {
         TRANSCRIPT
       </Text>
 
-      <Text style={[styles.text, { color: colors.text }]}>
-        {hasTranscript ? transcript : 'Your transcript will appear here...'}
-      </Text>
+      {isEditable ? (
+        <TextInput
+          value={transcript}
+          onChangeText={onChangeText}
+          multiline
+          textAlignVertical="top"
+          placeholder={placeholder ?? 'Your transcript will appear here...'}
+          placeholderTextColor={colors.textSecondary}
+          style={[styles.input, { color: colors.text }]}
+        />
+      ) : (
+        <Text style={[styles.text, { color: colors.text }]}>
+          {hasTranscript ? transcript : (placeholder ?? 'Your transcript will appear here...')}
+        </Text>
+      )}
     </View>
   );
 }
@@ -53,5 +75,13 @@ const styles = StyleSheet.create({
   text: {
     fontSize: FontSize.body,
     lineHeight: 26,
+  },
+
+  input: {
+    minHeight: 80,
+    fontSize: FontSize.body,
+    lineHeight: 26,
+    padding: 0,
+    margin: 0,
   },
 });
