@@ -76,7 +76,9 @@ export default function LanguageScreen() {
                     style={[
                       styles.statusText,
                       {
-                        color: installed ? colors.success : colors.textSecondary,
+                        color: installed
+                          ? colors.success
+                          : colors.textSecondary,
                       },
                     ]}
                   >
@@ -99,12 +101,7 @@ export default function LanguageScreen() {
                   activeOpacity={0.7}
                   onPress={() => handleInstall(language.label)}
                 >
-                  <Text
-                    style={[
-                      styles.installText,
-                      { color: colors.primary },
-                    ]}
-                  >
+                  <Text style={[styles.installText, { color: colors.primary }]}>
                     Install
                   </Text>
                 </TouchableOpacity>

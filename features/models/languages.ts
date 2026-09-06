@@ -27,16 +27,7 @@
  */
 
 export type LanguageId =
-  | 'en'
-  | 'hi'
-  | 'kn'
-  | 'gu'
-  | 'mr'
-  | 'ml'
-  | 'ta'
-  | 'te'
-  | 'or'
-  | 'bn';
+  'en' | 'hi' | 'kn' | 'gu' | 'mr' | 'ml' | 'ta' | 'te' | 'or' | 'bn';
 
 export type LanguageModel = {
   id: LanguageId;
@@ -77,13 +68,55 @@ export const SUPPORTED_LANGUAGES: LanguageModel[] = [
     bundled: true,
   },
   // Below: listed in Settings but no on-device model ships yet.
-  { id: 'gu', label: 'Gujarati', sttAssetPath: null, ttsAssetPath: null, bundled: false },
-  { id: 'mr', label: 'Marathi', sttAssetPath: null, ttsAssetPath: null, bundled: false },
-  { id: 'ml', label: 'Malayalam', sttAssetPath: null, ttsAssetPath: null, bundled: false },
-  { id: 'ta', label: 'Tamil', sttAssetPath: null, ttsAssetPath: null, bundled: false },
-  { id: 'te', label: 'Telugu', sttAssetPath: null, ttsAssetPath: null, bundled: false },
-  { id: 'or', label: 'Odia', sttAssetPath: null, ttsAssetPath: null, bundled: false },
-  { id: 'bn', label: 'Bengali', sttAssetPath: null, ttsAssetPath: null, bundled: false },
+  {
+    id: 'gu',
+    label: 'Gujarati',
+    sttAssetPath: null,
+    ttsAssetPath: null,
+    bundled: false,
+  },
+  {
+    id: 'mr',
+    label: 'Marathi',
+    sttAssetPath: null,
+    ttsAssetPath: null,
+    bundled: false,
+  },
+  {
+    id: 'ml',
+    label: 'Malayalam',
+    sttAssetPath: null,
+    ttsAssetPath: null,
+    bundled: false,
+  },
+  {
+    id: 'ta',
+    label: 'Tamil',
+    sttAssetPath: null,
+    ttsAssetPath: null,
+    bundled: false,
+  },
+  {
+    id: 'te',
+    label: 'Telugu',
+    sttAssetPath: null,
+    ttsAssetPath: null,
+    bundled: false,
+  },
+  {
+    id: 'or',
+    label: 'Odia',
+    sttAssetPath: null,
+    ttsAssetPath: null,
+    bundled: false,
+  },
+  {
+    id: 'bn',
+    label: 'Bengali',
+    sttAssetPath: null,
+    ttsAssetPath: null,
+    bundled: false,
+  },
 ];
 
 export function getLanguage(id: LanguageId): LanguageModel {
@@ -110,10 +143,16 @@ export function isLanguageInstalled(lang: LanguageModel): boolean {
 
 /** STT asset path for the given language, falling back to English default. */
 export function sttPathFor(id: LanguageId): string {
-  return getLanguage(id).sttAssetPath ?? getLanguage(DEFAULT_LANGUAGE_ID).sttAssetPath!;
+  return (
+    getLanguage(id).sttAssetPath ??
+    getLanguage(DEFAULT_LANGUAGE_ID).sttAssetPath!
+  );
 }
 
 /** TTS asset path for the given language, falling back to English default. */
 export function ttsPathFor(id: LanguageId): string {
-  return getLanguage(id).ttsAssetPath ?? getLanguage(DEFAULT_LANGUAGE_ID).ttsAssetPath!;
+  return (
+    getLanguage(id).ttsAssetPath ??
+    getLanguage(DEFAULT_LANGUAGE_ID).ttsAssetPath!
+  );
 }

@@ -86,7 +86,7 @@ export class STTEngine {
     // new one so peak RAM never holds both (~400MB would OOM low-end phones).
     if (this.stt) {
       console.log(
-        `[STT] Switching model ${this.activeModelPath} -> ${modelPath}: releasing old engine first`
+        `[STT] Switching model ${this.activeModelPath} -> ${modelPath}: releasing old engine first`,
       );
       await this.cleanup();
     }
@@ -125,7 +125,9 @@ export class STTEngine {
   }
 
   /** Idempotent preload — safe to call on every BLE connect. */
-  async ensureInitialized(modelPath: string = DEFAULT_MODEL_PATH): Promise<void> {
+  async ensureInitialized(
+    modelPath: string = DEFAULT_MODEL_PATH,
+  ): Promise<void> {
     return this.init(modelPath);
   }
 
@@ -134,7 +136,7 @@ export class STTEngine {
       throw new Error(
         this.lastError
           ? `STT Engine not initialized (last error: ${this.lastError})`
-          : 'STT Engine not initialized. Call ensureInitialized() after BLE connect first. (Native module missing, running on Web, or init failed)'
+          : 'STT Engine not initialized. Call ensureInitialized() after BLE connect first. (Native module missing, running on Web, or init failed)',
       );
     }
     return this.stt;
@@ -149,28 +151,37 @@ export class STTEngine {
     const result = await engine.transcribeFile(filePath);
     const text = (result.text ?? '').trim();
     if (text) {
-      console.log(`[STT] transcribeFile result (${text.length} chars): "${text}"`);
+      console.log(
+        `[STT] transcribeFile result (${text.length} chars): "${text}"`,
+      );
     } else {
-      console.warn('[STT] transcribeFile produced EMPTY text (no speech detected?)');
+      console.warn(
+        '[STT] transcribeFile produced EMPTY text (no speech detected?)',
+      );
     }
     return result.text;
   }
 
-  async transcribeSamples(samples: number[], sampleRate: number): Promise<string> {
+  async transcribeSamples(
+    samples: number[],
+    sampleRate: number,
+  ): Promise<string> {
     if (!this.stt) {
       await this.init();
     }
     const engine = this.requireEngine();
     const seconds = samples.length / sampleRate;
     console.log(
-      `[STT] transcribeSamples started: ${samples.length} samples @ ${sampleRate}Hz (${seconds.toFixed(1)}s), model=${this.activeModelPath}`
+      `[STT] transcribeSamples started: ${samples.length} samples @ ${sampleRate}Hz (${seconds.toFixed(1)}s), model=${this.activeModelPath}`,
     );
     const result = await engine.transcribeSamples(samples, sampleRate);
     const text = (result.text ?? '').trim();
     if (text) {
       console.log(`[STT] Transcribed text (${text.length} chars): "${text}"`);
     } else {
-      console.warn('[STT] Model returned EMPTY text — no speech detected or audio too short/noisy.');
+      console.warn(
+        '[STT] Model returned EMPTY text — no speech detected or audio too short/noisy.',
+      );
     }
     return result.text;
   }
@@ -194,7 +205,9 @@ export class STTEngine {
       this.stt = null;
     }
     if (this.activeModelPath) {
-      console.log(`[STT] Engine released (was ${this.activeModelPath}), RAM freed`);
+      console.log(
+        `[STT] Engine released (was ${this.activeModelPath}), RAM freed`,
+      );
     }
     this.activeModelPath = null;
   }

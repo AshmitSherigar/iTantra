@@ -49,7 +49,9 @@ export default function TranscriptBox({
         />
       ) : (
         <Text style={[styles.text, { color: colors.text }]}>
-          {hasTranscript ? transcript : (placeholder ?? 'Your transcript will appear here...')}
+          {hasTranscript
+            ? transcript
+            : (placeholder ?? 'Your transcript will appear here...')}
         </Text>
       )}
     </View>

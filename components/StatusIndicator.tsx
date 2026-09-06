@@ -20,19 +20,8 @@ const statusText: Record<Status, string> = {
 export default function StatusIndicator({ status }: StatusIndicatorProps) {
   const { colors } = useTheme() as any;
 
-  const dotColor =
-    status === 'listening'
-      ? colors.error
-      : status === 'processing'
-        ? colors.primary
-        : status === 'error'
-          ? colors.error
-          : colors.success;
-
   return (
     <View style={styles.container}>
-      <View style={[styles.dot, { backgroundColor: dotColor }]} />
-
       <Text style={[styles.text, { color: colors.textSecondary }]}>
         {statusText[status]}
       </Text>

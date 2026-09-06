@@ -46,7 +46,7 @@ export type AutoSpeakApi = {
  */
 export function useAutoSpeak(
   defaultEnabled = true,
-  opts?: { autoInit?: boolean }
+  opts?: { autoInit?: boolean },
 ): AutoSpeakApi {
   const autoInit = opts?.autoInit ?? true;
   const [enabled, setEnabled] = useState(defaultEnabled);
@@ -185,15 +185,12 @@ export function useAutoSpeak(
   }, []);
 
   // When the user disables auto-speak mid-utterance, stop playback.
-  const handleSetEnabled = useCallback(
-    (v: boolean) => {
-      setEnabled(v);
-      if (!v) {
-        hindiTTS.stop().catch(() => {});
-      }
-    },
-    [],
-  );
+  const handleSetEnabled = useCallback((v: boolean) => {
+    setEnabled(v);
+    if (!v) {
+      hindiTTS.stop().catch(() => {});
+    }
+  }, []);
 
   return {
     enabled,

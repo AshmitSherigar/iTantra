@@ -21,9 +21,9 @@ export const styles = StyleSheet.create({
   },
 
   headerLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 1.2,
+    fontSize: 20,
+    fontWeight: '900',
+    letterSpacing: 2,
   },
 
   headerTitle: {
@@ -39,13 +39,7 @@ export const styles = StyleSheet.create({
     gap: 6,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: Radius.round,
-  },
-
-  statusDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
+    borderRadius: Radius.sm,
   },
 
   statusText: {
@@ -111,6 +105,8 @@ export const styles = StyleSheet.create({
   },
 
   nameInput: {
+    borderBlockColor: '#D1D5DB',
+    borderWidth: 1,
     height: 48,
     borderRadius: Radius.md,
     paddingHorizontal: 14,

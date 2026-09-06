@@ -90,7 +90,8 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       });
 
       // Create and start a new recording
-      const { recording } = await Audio.Recording.createAsync(RECORDING_OPTIONS);
+      const { recording } =
+        await Audio.Recording.createAsync(RECORDING_OPTIONS);
       recordingRef.current = recording;
       setIsRecording(true);
 

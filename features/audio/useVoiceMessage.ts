@@ -72,7 +72,7 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
     removeErrorListenerRef.current?.();
     removeErrorListenerRef.current = null;
   }, []);
-  
+
   // Accumulate PCM samples in memory
   const audioChunksRef = useRef<Float32Array[]>([]);
   const totalSamplesRef = useRef(0);
@@ -183,7 +183,10 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
           playThroughEarpieceAndroid: false,
         });
       } catch (e) {
-        console.warn('[useVoiceMessage] setAudioModeAsync failed (ignored):', e);
+        console.warn(
+          '[useVoiceMessage] setAudioModeAsync failed (ignored):',
+          e,
+        );
       }
       pushLog('[Mic] step=create-stream');
 
@@ -196,7 +199,7 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
         (samples: Float32Array, sampleRate: number) => {
           audioChunksRef.current.push(samples);
           totalSamplesRef.current += samples.length;
-        }
+        },
       );
 
       removeErrorListenerRef.current = mic.onError((message: string) => {
@@ -256,12 +259,12 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
         allSamples.set(chunk, offset);
         offset += chunk.length;
       }
-      
+
       // Convert Float32Array to number[] for the bridge
       const samplesArray = Array.from(allSamples);
 
       pushLog(
-        `[STT] Captured ${samplesArray.length} samples (${(samplesArray.length / 16000).toFixed(1)}s). Transcribing…`
+        `[STT] Captured ${samplesArray.length} samples (${(samplesArray.length / 16000).toFixed(1)}s). Transcribing…`,
       );
 
       // 3. Transcribe using the offline engine (lazy-loads model if needed)
@@ -276,7 +279,7 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
         }
       }
       const text = await sttEngine.transcribeSamples(samplesArray, 16000);
-      
+
       const finalText = text.trim();
       if (!finalText) {
         const msg = 'No speech detected.';

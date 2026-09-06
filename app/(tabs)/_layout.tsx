@@ -7,10 +7,8 @@ import { useTheme } from '../../context/ThemeContext';
 export default function TabsLayout() {
   const insets = useSafeAreaInsets();
   const themeContext = useTheme() as any;
-  const colors =
-    themeContext.colors ??
-    themeContext.theme?.colors ??
-    {
+  const colors = themeContext.colors ??
+    themeContext.theme?.colors ?? {
       primary: '#007AFF',
       textSecondary: '#8E8E93',
       surface: '#FFFFFF',

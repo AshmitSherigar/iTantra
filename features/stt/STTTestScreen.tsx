@@ -52,7 +52,9 @@ export function STTTestScreen() {
       setTranscription(text);
     } catch (error) {
       console.error('Transcription failed:', error);
-      setTranscription(`Error: ${error instanceof Error ? error.message : 'Transcription failed'}`);
+      setTranscription(
+        `Error: ${error instanceof Error ? error.message : 'Transcription failed'}`,
+      );
     } finally {
       setIsProcessing(false);
     }

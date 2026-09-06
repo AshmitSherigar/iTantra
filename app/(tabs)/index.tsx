@@ -51,14 +51,13 @@ export default function Index() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sttModelPath, languageInstalled]);
 
-  const status: 'ready' | 'listening' | 'processing' | 'error' =
-    isRecording
-      ? 'listening'
-      : isTranscribing || sttLoading
-        ? 'processing'
-        : voiceError || sttError
-          ? 'error'
-          : 'ready';
+  const status: 'ready' | 'listening' | 'processing' | 'error' = isRecording
+    ? 'listening'
+    : isTranscribing || sttLoading
+      ? 'processing'
+      : voiceError || sttError
+        ? 'error'
+        : 'ready';
 
   function promptInstallLanguage() {
     Alert.alert(
@@ -113,9 +112,7 @@ export default function Index() {
     const message = transcript.trim();
     if (!message) return;
     // TODO: broadcast `message` (+ selectedLanguage.id) to the Bluetooth mesh.
-    console.log(
-      `[Broadcast] mesh send (${selectedLanguage.id}): "${message}"`,
-    );
+    console.log(`[Broadcast] mesh send (${selectedLanguage.id}): "${message}"`);
     Alert.alert(
       'Broadcast',
       'Bluetooth mesh broadcast will be implemented later.',
@@ -123,17 +120,18 @@ export default function Index() {
     );
   }
 
-  const canBroadcast = transcript.trim().length > 0 && !isRecording && !isTranscribing;
+  const canBroadcast =
+    transcript.trim().length > 0 && !isRecording && !isTranscribing;
 
   const sttStatusLine = !languageInstalled
-    ? `${selectedLanguage.label} • model not installed`
+    ? `${selectedLanguage.label} • Model not installed`
     : sttLoading
-      ? `${selectedLanguage.label} • loading speech model…`
+      ? `${selectedLanguage.label} • Loading speech model…`
       : sttError
-        ? `${selectedLanguage.label} • model failed: ${sttError}`
+        ? `${selectedLanguage.label} • Model failed: ${sttError}`
         : sttReady
-          ? `${selectedLanguage.label} • speech model ready`
-          : `${selectedLanguage.label} • tap mic to load model`;
+          ? `${selectedLanguage.label} • Speech model ready`
+          : `${selectedLanguage.label} • Tap mic to load model`;
 
   return (
     <SafeAreaView
@@ -143,17 +141,9 @@ export default function Index() {
       {/* Header */}
       <View style={styles.headerArea}>
         <View>
-          <Text style={[styles.greeting, { color: colors.textSecondary }]}>
-            READY TO CAPTURE
-          </Text>
-
           <Text style={[styles.title, { color: colors.text }]}>
             Speech to Text
           </Text>
-        </View>
-
-        <View style={[styles.headerIcon, { backgroundColor: colors.surface }]}>
-          <Ionicons name="mic-outline" size={22} color={colors.primary} />
         </View>
       </View>
 
@@ -172,15 +162,6 @@ export default function Index() {
               },
             ]}
           >
-            <View
-              style={[
-                styles.badgeDot,
-                {
-                  backgroundColor: isRecording ? '#FFFFFF' : colors.success,
-                },
-              ]}
-            />
-
             <Text
               style={[
                 styles.liveText,
@@ -204,34 +185,6 @@ export default function Index() {
               : `Tap the mic and speak in ${selectedLanguage.label}…`
           }
         />
-
-        <Text style={[styles.languageLine, { color: colors.textSecondary }]}>
-          {sttStatusLine}
-        </Text>
-
-        {!languageInstalled ? (
-          <Pressable
-            onPress={promptInstallLanguage}
-            style={[styles.installBanner, { backgroundColor: colors.surface }]}
-          >
-            <Ionicons
-              name="download-outline"
-              size={16}
-              color={colors.primary}
-            />
-            <Text style={[styles.installText, { color: colors.primary }]}>
-              Install “{selectedLanguage.label}” models to enable the mic
-            </Text>
-          </Pressable>
-        ) : null}
-
-        {voiceError || sttError ? (
-          !isRecording && !isTranscribing ? (
-            <Text style={[styles.errorLine, { color: colors.error }]}>
-              {voiceError ?? `Speech model: ${sttError}`}
-            </Text>
-          ) : null
-        ) : null}
 
         {/* Broadcast to Bluetooth mesh (implementation later) */}
         <Pressable
@@ -262,6 +215,29 @@ export default function Index() {
         </Pressable>
       </View>
 
+      <Text style={[styles.languageLine, { color: colors.textSecondary }]}>
+        {sttStatusLine}
+      </Text>
+
+      {voiceError || sttError ? (
+        !isRecording && !isTranscribing ? (
+          <Text style={[styles.errorLine, { color: colors.error }]}>
+            {voiceError ?? `Speech model: ${sttError}`}
+          </Text>
+        ) : null
+      ) : null}
+
+      {!languageInstalled ? (
+        <Pressable
+          onPress={promptInstallLanguage}
+          style={[styles.installBanner, { backgroundColor: colors.surface }]}
+        >
+          <Ionicons name="download-outline" size={16} color={colors.primary} />
+          <Text style={[styles.installText, { color: colors.primary }]}>
+            Install “{selectedLanguage.label}” models to enable the mic
+          </Text>
+        </Pressable>
+      ) : null}
       {/* Recording Area */}
       <View
         style={[
@@ -293,9 +269,7 @@ export default function Index() {
         {sttLoading && !isRecording ? (
           <View style={styles.loadingRow}>
             <ActivityIndicator size="small" color={colors.primary} />
-            <Text
-              style={[styles.loadingText, { color: colors.textSecondary }]}
-            >
+            <Text style={[styles.loadingText, { color: colors.textSecondary }]}>
               Loading speech model…
             </Text>
           </View>
@@ -374,7 +348,7 @@ const styles = StyleSheet.create({
     gap: 5,
     paddingHorizontal: 9,
     paddingVertical: 5,
-    borderRadius: Radius.round,
+    borderRadius: Radius.sm,
   },
 
   badgeDot: {
@@ -390,7 +364,7 @@ const styles = StyleSheet.create({
   },
 
   languageLine: {
-    marginTop: Spacing.sm,
+    marginTop: Spacing.xl,
     fontSize: 12,
   },
 
@@ -411,8 +385,7 @@ const styles = StyleSheet.create({
   },
 
   errorLine: {
-    marginTop: Spacing.sm,
-    fontSize: 13,
+    fontSize: 10,
   },
 
   broadcastButton: {

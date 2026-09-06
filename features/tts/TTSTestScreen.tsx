@@ -68,7 +68,9 @@ export function TTSTestScreen() {
       addLog('⚠️ Enter some text first.');
       return;
     }
-    addLog(`🔊 Speaking: "${text.substring(0, 40)}${text.length > 40 ? '...' : ''}"`);
+    addLog(
+      `🔊 Speaking: "${text.substring(0, 40)}${text.length > 40 ? '...' : ''}"`,
+    );
     try {
       await hindiTTS.speak(text);
       addLog('✅ Speech started (streaming).');
@@ -190,10 +192,7 @@ export function TTSTestScreen() {
               {SAMPLE_TEXTS.map((sample, i) => (
                 <TouchableOpacity
                   key={i}
-                  style={[
-                    styles.chip,
-                    text === sample && styles.chipActive,
-                  ]}
+                  style={[styles.chip, text === sample && styles.chipActive]}
                   onPress={() => setText(sample)}
                 >
                   <Text
@@ -262,7 +261,7 @@ export function TTSTestScreen() {
         >
           {log.length === 0 ? (
             <Text style={styles.logEmpty}>
-              Tap "Initialize Engine" to get started.
+              {'Tap "Initialize Engine" to get started.'}
             </Text>
           ) : (
             log.map((entry, i) => (

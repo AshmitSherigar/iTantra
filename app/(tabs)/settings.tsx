@@ -110,7 +110,7 @@ export default function SettingsScreen() {
                   { color: colors.textSecondary },
                 ]}
               >
-                Information about Low-Latency STT
+                Information about VaaniSetu
               </Text>
             </View>
 
@@ -121,7 +121,7 @@ export default function SettingsScreen() {
         </View>
 
         <Text style={[styles.version, { color: colors.textSecondary }]}>
-          Low-Latency STT • v1.0.0
+          VaaniSetu • v1.0.0
         </Text>
       </ScrollView>
     </SafeAreaView>

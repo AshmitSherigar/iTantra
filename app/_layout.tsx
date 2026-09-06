@@ -8,21 +8,21 @@ export default function RootLayout() {
   return (
     <ThemeProvider>
       <LanguageProvider>
-      <Stack>
-        <Stack.Screen
-          name="(tabs)"
-          options={{
-            headerShown: false,
-          }}
-        />
+        <Stack>
+          <Stack.Screen
+            name="(tabs)"
+            options={{
+              headerShown: false,
+            }}
+          />
 
-        <Stack.Screen
-          name="settings"
-          options={{
-            headerShown: false,
-          }}
-        />
-      </Stack>
+          <Stack.Screen
+            name="settings"
+            options={{
+              headerShown: false,
+            }}
+          />
+        </Stack>
       </LanguageProvider>
     </ThemeProvider>
   );

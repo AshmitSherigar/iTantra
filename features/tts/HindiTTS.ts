@@ -1,5 +1,11 @@
-import { createStreamingTTS, detectTtsModel } from 'react-native-sherpa-onnx/tts';
-import type { StreamingTtsEngine, TtsStreamController } from 'react-native-sherpa-onnx/tts';
+import {
+  createStreamingTTS,
+  detectTtsModel,
+} from 'react-native-sherpa-onnx/tts';
+import type {
+  StreamingTtsEngine,
+  TtsStreamController,
+} from 'react-native-sherpa-onnx/tts';
 import { ITTSService, HindiTTSConfig, TTSStatus } from './types';
 
 // Target size for one smooth native synthesis. Fewer, larger generations
@@ -154,12 +160,13 @@ class HindiTTS implements ITTSService {
     // Idempotent for the same language; switching languages frees the old
     // native engine FIRST so peak RAM never holds two (~228MB would OOM).
     if (this.status.isInitialized && this.activeModelPath === modelPath) {
-      if (config?.debug) console.log(`[VoiceTTS] Already initialized (${modelPath}).`);
+      if (config?.debug)
+        console.log(`[VoiceTTS] Already initialized (${modelPath}).`);
       return;
     }
     if (this.status.isInitialized && this.activeModelPath !== modelPath) {
       console.log(
-        `[VoiceTTS] Switching model ${this.activeModelPath} -> ${modelPath}: releasing old engine first`
+        `[VoiceTTS] Switching model ${this.activeModelPath} -> ${modelPath}: releasing old engine first`,
       );
       await this.destroy();
     }
@@ -187,7 +194,9 @@ class HindiTTS implements ITTSService {
         debug: config?.debug ?? false,
       });
 
-      console.log(`[VoiceTTS] step=created (${modelPath}), reading model info…`);
+      console.log(
+        `[VoiceTTS] step=created (${modelPath}), reading model info…`,
+      );
       const { sampleRate, numSpeakers } = await this.engine.getModelInfo();
       this.activeModelPath = modelPath;
       this.status = {
@@ -199,13 +208,16 @@ class HindiTTS implements ITTSService {
       };
 
       if (config?.debug) {
-        console.log(`[VoiceTTS] Initialized successfully (${modelPath}). Sample Rate: ${sampleRate}, Speakers: ${numSpeakers}`);
+        console.log(
+          `[VoiceTTS] Initialized successfully (${modelPath}). Sample Rate: ${sampleRate}, Speakers: ${numSpeakers}`,
+        );
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       this.activeModelPath = null;
       this.status.error = errorMsg;
-      if (config?.debug) console.error('[VoiceTTS] Initialization failed:', errorMsg);
+      if (config?.debug)
+        console.error('[VoiceTTS] Initialization failed:', errorMsg);
       throw err;
     }
   }
@@ -259,7 +271,10 @@ class HindiTTS implements ITTSService {
       if (current.trim()) parts.push(current.trim());
       current = '';
     };
-    for (const c of [...chunks, ...(remainder.trim() ? [remainder.trim()] : [])]) {
+    for (const c of [
+      ...chunks,
+      ...(remainder.trim() ? [remainder.trim()] : []),
+    ]) {
       const candidate = current ? `${current} ${c}` : c;
       if (candidate.length > MAX_SYNTHESIS_CHARS) {
         flush();
@@ -512,7 +527,9 @@ class HindiTTS implements ITTSService {
       this.engine = null;
     }
     if (this.activeModelPath) {
-      console.log(`[VoiceTTS] Engine released (was ${this.activeModelPath}), RAM freed`);
+      console.log(
+        `[VoiceTTS] Engine released (was ${this.activeModelPath}), RAM freed`,
+      );
     }
     this.activeModelPath = null;
     this.status = {

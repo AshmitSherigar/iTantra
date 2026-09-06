@@ -228,9 +228,8 @@ export default function BluetoothScreen() {
       >
         <View>
           <Text style={[styles.headerLabel, { color: colors.textSecondary }]}>
-            BLUETOOTH
+            VaaniSetu
           </Text>
-          <Text style={[styles.headerTitle, { color: colors.text }]}>Chat</Text>
         </View>
 
         <View
@@ -243,16 +242,6 @@ export default function BluetoothScreen() {
             },
           ]}
         >
-          <View
-            style={[
-              styles.statusDot,
-              {
-                backgroundColor: bluetoothReady
-                  ? colors.success
-                  : colors.textSecondary,
-              },
-            ]}
-          />
           <Text
             style={[
               styles.statusText,
@@ -274,9 +263,6 @@ export default function BluetoothScreen() {
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.section}>
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>
-              Setup
-            </Text>
             <Text
               style={[
                 styles.sectionDescription,

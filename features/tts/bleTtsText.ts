@@ -15,7 +15,11 @@ export function decodeHexIncremental(joinedHex: string): {
   text: string;
   completeHexLength: number;
 } {
-  const clean = joinedHex.trim().replace(/^0x/i, '').replace(/[\s_\-:]/g, '').toLowerCase();
+  const clean = joinedHex
+    .trim()
+    .replace(/^0x/i, '')
+    .replace(/[\s_\-:]/g, '')
+    .toLowerCase();
   if (!clean) return { text: '', completeHexLength: 0 };
 
   const full = safeHexToText(clean);
