@@ -4,7 +4,6 @@ import {
   startScan,
   stopScan,
 } from 'react-native-bluetooth-ble';
-import { SERVICE_UUID } from './constants';
 import { ensureBleScanPermissions } from './permissions';
 import {
   getDeviceDisplayName,
@@ -16,11 +15,6 @@ type UseBleScannerOpts = {
   isChatConnected: boolean;
 };
 
-/**
- * Central role — discovery only.
- * FIX: requests BT + Location before every scan (new Android returns zero
- * results without the location grant, even though the old code asked nothing).
- */
 export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
   const [devices, setDevices] = useState<ScannedDevice[]>([]);
   const [isScanning, setIsScanning] = useState(false);
@@ -43,7 +37,6 @@ export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
     console.log('Scan stopped');
   }, []);
 
-  // Stop scanning when the screen unmounts.
   useEffect(() => {
     return () => {
       removeDeviceListenerRef.current?.();
@@ -61,8 +54,6 @@ export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
     }
     setScanError(null);
 
-    // NEW ANDROID FIX — without this the app never showed a location prompt
-    // and `startScan` silently discovered nothing.
     const allowed = await ensureBleScanPermissions();
     if (!allowed) {
       setScanError(
@@ -84,15 +75,10 @@ export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
       setDevices((currentDevices) => {
         const byId = currentDevices.findIndex((d) => d.id === found.id);
         if (byId !== -1) {
-          // allowDuplicates delivers the same id again, often with the local
-          // name filled in on the second callback — merge instead of dropping.
           const updated = [...currentDevices];
           updated[byId] = mergeScannedDevice(currentDevices[byId], found);
           return updated;
         }
-        // BLE privacy: Android/iOS rotate the advertised MAC/UUID, so tapping
-        // "Start Bluetooth" again on the peer shows up as a NEW id with the
-        // SAME name. Collapse those instead of listing the phone N times.
         const incomingName = getDeviceDisplayName(found);
         if (incomingName !== 'Bluetooth Device') {
           const byName = currentDevices.findIndex(
@@ -111,29 +97,13 @@ export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
             return updated;
           }
         }
-        // Cap growth in crowded areas.
         if (currentDevices.length >= 50) return currentDevices;
         return [...currentDevices, found];
       });
     });
 
     console.log('Starting scan...');
-    // Filter by our chat service so random nameless BLE peripherals
-    // (TVs, watches, beacons) don't fill the list. allowDuplicates must be
-    // true: the first callback for a peer often has no name yet and the
-    // scan-response carrying the local name arrives right after.
-    try {
-      await startScan({
-        serviceUUIDs: [SERVICE_UUID],
-        allowDuplicates: true,
-        scanMode: 'lowLatency',
-      });
-    } catch (e) {
-      // Fall back to an unfiltered scan if the device rejects the filter
-      // (some Android stacks do) — names still resolve via merge logic.
-      console.log('Filtered scan failed, retrying unfiltered:', e);
-      await startScan({ allowDuplicates: true, scanMode: 'lowLatency' });
-    }
+    startScan({ allowDuplicates: true, scanMode: 'lowLatency' });
     setIsScanning(true);
     console.log('Scan started');
   }, [isChatConnected, isScanning]);

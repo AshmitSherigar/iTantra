@@ -9,7 +9,6 @@ export const makeFrameId = () =>
     .toString(16)
     .padStart(4, '0');
 
-/** Normalise the various hex formats stacks emit (spaces, 0x, -, :, _). */
 export function cleanHex(hex: string): string {
   return hex
     .trim()
@@ -21,9 +20,6 @@ export function cleanHex(hex: string): string {
 export function hexToText(hex: string | null | undefined): string | null {
   if (hex == null) return null;
   try {
-    // Native sides disagree on formatting: Android keeps spaces, iOS only
-    // trims the ends and pads odd-length with "0" (corrupting data), and
-    // some stacks add "0x" / separators. Normalise before decoding.
     const clean = cleanHex(hex);
     if (!clean) return null;
     if (clean.length % 2 !== 0) {
@@ -53,7 +49,6 @@ export function splitHexIntoPackets(hex: string): string[] {
   return packets;
 }
 
-/** Valid data packet during reassembly (byte-exact hex). Null when corrupt. */
 export function cleanDataPacket(hex: string): string | null {
   const clean = cleanHex(hex);
   if (!clean || clean.length % 2 !== 0 || !/^[0-9a-f]*$/.test(clean)) {

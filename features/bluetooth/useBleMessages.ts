@@ -6,6 +6,7 @@ import {
   type ChatMessage,
 } from './constants';
 import { cleanDataPacket, hexToText } from './codec';
+import { decodeBroadcast, emitBroadcast } from './broadcast';
 import { BleIncomingTextTracker } from '../tts/bleTtsText';
 
 export type StreamTts = {
@@ -29,21 +30,11 @@ const emptyState = (): ReassemblyState => ({
   timer: null,
 });
 
-/**
- * Owns the chat message list + the chunked-message reassembly buffer.
- *
- * Every BLE notification / write event funnels through `handleIncomingHex`:
- * - Control frames (START/END) drive the buffer and are never shown.
- * - Data packets while reassembling are stored as RAW HEX (byte-exact) so
- *   multi-byte UTF-8 (Hindi, emoji) split across packets reassembles cleanly,
- *   while newly-completed text is pushed to streaming TTS immediately.
- * - Anything else is a complete single-packet message, decoded + spoken at once
- *   (backward compatible with peers that send short messages without framing).
- */
 export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const reassemblyRef = useRef<ReassemblyState>(emptyState());
   const trackerRef = useRef(new BleIncomingTextTracker());
+  const seenBroadcastIdsRef = useRef(new Set<string>());
 
   const addMessage = useCallback(
     (text: string, sender: 'me' | 'other') => {
@@ -62,6 +53,22 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
     reassemblyRef.current = emptyState();
   }, []);
 
+  const handleCompletedText = useCallback(
+    (text: string) => {
+      const broadcast = decodeBroadcast(text);
+      if (broadcast) {
+        if (seenBroadcastIdsRef.current.has(broadcast.id)) return;
+        seenBroadcastIdsRef.current.add(broadcast.id);
+        emitBroadcast(broadcast);
+        return;
+      }
+
+      addMessage(text, 'other');
+      ttsRef.current.speakFullMessage(text);
+    },
+    [addMessage, ttsRef],
+  );
+
   const flushReassembly = useCallback(() => {
     const state = reassemblyRef.current;
     if (!state.id || state.chunks.length === 0) {
@@ -71,15 +78,13 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
     const joined = state.chunks.join('');
     const text = hexToText(joined);
     clearReassembly();
-    // The full text arrived via packets — its speakable parts were already
-    // pushed to streaming TTS as packets arrived; this flushes the tail.
     ttsRef.current.endStream();
     if (text) {
-      addMessage(text, 'other');
+      handleCompletedText(text);
     } else {
       console.warn('Discarding undecodable chunked message');
     }
-  }, [addMessage, clearReassembly, ttsRef]);
+  }, [clearReassembly, handleCompletedText, ttsRef]);
 
   const armReassemblyTimeout = useCallback(() => {
     const state = reassemblyRef.current;
@@ -93,7 +98,6 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
   const resetIncomingState = useCallback(() => {
     clearReassembly();
     trackerRef.current.reset();
-    // Finish any half-streamed utterance so its tail is still spoken.
     ttsRef.current.endStream();
   }, [clearReassembly, ttsRef]);
 
@@ -117,8 +121,6 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
           }
           clearReassembly();
           reassemblyRef.current = { id, total, chunks: [], timer: null };
-          // New streamed message: reset decode tracking and start a fresh
-          // TTS utterance (flushes any orphaned tail from a lost END).
           trackerRef.current.reset();
           ttsRef.current.beginStream();
           armReassemblyTimeout();
@@ -136,7 +138,6 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
         }
       }
 
-      // Not a control frame.
       if (reassemblyRef.current.id) {
         const clean = cleanDataPacket(hex);
         if (!clean) {
@@ -144,8 +145,6 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
           return;
         }
         reassemblyRef.current.chunks.push(clean);
-        // Streaming TTS: decode everything received so far and speak only
-        // the newly-completed characters (handles Hindi split across packets).
         try {
           const fresh = trackerRef.current.pushJoinedHex(
             reassemblyRef.current.chunks.join(''),
@@ -155,7 +154,6 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
           console.warn('Streaming TTS push failed:', e);
         }
         armReassemblyTimeout();
-        // Tolerate a lost END frame: if we already have everything, flush.
         if (
           reassemblyRef.current.chunks.length >= reassemblyRef.current.total
         ) {
@@ -165,15 +163,13 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
       }
 
       if (text == null || text === '') return;
-      addMessage(text, 'other');
-      // Single-packet message — speak it in full (queued behind any speech).
-      ttsRef.current.speakFullMessage(text);
+      handleCompletedText(text);
     },
     [
-      addMessage,
       armReassemblyTimeout,
       clearReassembly,
       flushReassembly,
+      handleCompletedText,
       ttsRef,
     ],
   );

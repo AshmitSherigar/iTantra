@@ -18,6 +18,7 @@ import {
 } from './constants';
 import { textToHex } from './codec';
 import { sendHexFramed } from './transport';
+import { encodeBroadcast, type BroadcastEnvelope } from './broadcast';
 
 type UseBleConnectionOpts = {
   handleIncomingHex: (hex: string | null | undefined) => void;
@@ -31,11 +32,6 @@ type UseBleConnectionOpts = {
   promptInstallLanguage: () => void;
 };
 
-/**
- * GATT connection state machine — central (scanner connects) + peripheral
- * (advertiser gets subscribed). Owns connect/disconnect, listeners and all
- * outbound sends (typed + voice share one framed path).
- */
 export function useBleConnection(opts: UseBleConnectionOpts) {
   const {
     handleIncomingHex,
@@ -47,24 +43,27 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
     promptInstallLanguage,
   } = opts;
 
+  const [connectedDeviceIds, setConnectedDeviceIds] = useState<string[]>([]);
   const [connectedDeviceId, setConnectedDeviceId] = useState<string | null>(
     null,
   );
   const [peripheralCentralId, setPeripheralCentralId] = useState<string | null>(
     null,
   );
+  const [peripheralCentralIds, setPeripheralCentralIds] = useState<string[]>(
+    [],
+  );
   const [isConnecting, setIsConnecting] = useState(false);
 
-  // Latest handler for use inside BLE event listeners (registered once per
-  // connection, would otherwise capture stale closures).
   const incomingHexRef = useRef(handleIncomingHex);
   useEffect(() => {
     incomingHexRef.current = handleIncomingHex;
   }, [handleIncomingHex]);
 
-  const removeCentralValueListenerRef = useRef<(() => void) | undefined>(
-    undefined,
+  const removeCentralValueListenersRef = useRef(
+    new Map<string, () => void>(),
   );
+  const connectingDeviceIdsRef = useRef(new Set<string>());
   const removePeripheralWriteListenerRef = useRef<(() => void) | undefined>(
     undefined,
   );
@@ -76,8 +75,10 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
   >(undefined);
 
   useEffect(() => {
+    const centralListeners = removeCentralValueListenersRef.current;
     return () => {
-      removeCentralValueListenerRef.current?.();
+      centralListeners.forEach((remove) => remove());
+      centralListeners.clear();
       removePeripheralWriteListenerRef.current?.();
       removePeripheralSubscribedListenerRef.current?.();
       removePeripheralUnsubscribedListenerRef.current?.();
@@ -91,7 +92,9 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
   }, []);
 
   const clearConnection = useCallback(() => {
+    setConnectedDeviceIds([]);
     setConnectedDeviceId(null);
+    setPeripheralCentralIds([]);
     setPeripheralCentralId(null);
     clearMessages();
     resetIncomingState();
@@ -130,7 +133,12 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
           TX_CHARACTERISTIC_UUID.toLowerCase()
         )
           return;
-        setPeripheralCentralId(event.centralId);
+        setPeripheralCentralIds((current) =>
+          current.includes(event.centralId)
+            ? current
+            : [...current, event.centralId],
+        );
+        setPeripheralCentralId((current) => current ?? event.centralId);
         setMessages([]);
         resetIncomingState();
         console.log('Peripheral chat is ready');
@@ -148,7 +156,13 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
           TX_CHARACTERISTIC_UUID.toLowerCase()
         )
           return;
-        setPeripheralCentralId(null);
+        setPeripheralCentralIds((current) => {
+          const next = current.filter((id) => id !== event.centralId);
+          setPeripheralCentralId((primary) =>
+            primary === event.centralId ? next[0] ?? null : primary,
+          );
+          return next;
+        });
         setMessages([]);
         resetIncomingState();
       },
@@ -157,31 +171,35 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
     console.log('Peripheral listeners ready');
   }, [resetIncomingState, setMessages]);
 
-  // Exposed so the chat screen can register peripheral listeners when it
-  // starts advertising.
   const ensurePeripheralListeners = useCallback(() => {
     setupPeripheralListeners();
   }, [setupPeripheralListeners]);
 
   const connectToDevice = useCallback(
     async (deviceId: string, preConnect?: () => Promise<void> | void) => {
-      if (isConnecting || connectedDeviceId || peripheralCentralId) return;
-      // Require the selected language's models before opening a chat.
+      if (
+        connectingDeviceIdsRef.current.has(deviceId) ||
+        connectedDeviceIds.includes(deviceId)
+      ) {
+        return;
+      }
       if (!isLanguageInstalled) {
         promptInstallLanguage();
         return;
       }
+      connectingDeviceIdsRef.current.add(deviceId);
       setIsConnecting(true);
 
       try {
         console.log('CONNECT START — Device:', deviceId);
-        // Screen stops scanning + clears the list first (keeps this hook
-        // decoupled from the scanner).
         await preConnect?.();
 
         await connect(deviceId);
         console.log('Connected');
-        setConnectedDeviceId(deviceId);
+        setConnectedDeviceIds((current) =>
+          current.includes(deviceId) ? current : [...current, deviceId],
+        );
+        setConnectedDeviceId((current) => current ?? deviceId);
 
         const services = await discoverServices(deviceId);
         const chatService = services.find(
@@ -191,7 +209,12 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
         if (!chatService) {
           console.log('Chat service not found');
           await disconnect(deviceId);
-          clearConnection();
+          setConnectedDeviceIds((current) =>
+            current.filter((id) => id !== deviceId),
+          );
+          setConnectedDeviceId((current) =>
+            current === deviceId ? null : current,
+          );
           return;
         }
 
@@ -205,16 +228,16 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
         if (!rxCharacteristic || !txCharacteristic) {
           console.log('RX or TX characteristic not found');
           await disconnect(deviceId);
-          clearConnection();
+          setConnectedDeviceIds((current) =>
+            current.filter((id) => id !== deviceId),
+          );
+          setConnectedDeviceId((current) =>
+            current === deviceId ? null : current,
+          );
           return;
         }
 
-        if (removeCentralValueListenerRef.current) {
-          removeCentralValueListenerRef.current();
-          removeCentralValueListenerRef.current = undefined;
-        }
-
-        removeCentralValueListenerRef.current = addEventListener(
+        const removeValueListener = addEventListener(
           'characteristicValueChanged',
           (event) => {
             if (event.deviceId !== deviceId) return;
@@ -228,6 +251,7 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
             incomingHexRef.current(event.value);
           },
         );
+        removeCentralValueListenersRef.current.set(deviceId, removeValueListener);
 
         await subscribeToCharacteristic(
           deviceId,
@@ -235,8 +259,6 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
           TX_CHARACTERISTIC_UUID,
         );
 
-        // Best effort: raise ATT MTU so fewer packets are needed. Chunking to
-        // 20 bytes still keeps us safe when negotiation fails (e.g. iOS).
         try {
           await requestMTU(deviceId, 512);
         } catch (e) {
@@ -248,33 +270,38 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
         console.log('CONNECT COMPLETE');
       } catch (error) {
         console.log('CONNECT ERROR:', error);
-        clearConnection();
+        removeCentralValueListenersRef.current.get(deviceId)?.();
+        removeCentralValueListenersRef.current.delete(deviceId);
+        setConnectedDeviceIds((current) =>
+          current.filter((id) => id !== deviceId),
+        );
+        setConnectedDeviceId((current) =>
+          current === deviceId ? null : current,
+        );
       } finally {
+        connectingDeviceIdsRef.current.delete(deviceId);
         setIsConnecting(false);
       }
     },
     [
-      clearConnection,
-      connectedDeviceId,
-      isConnecting,
+      connectedDeviceIds,
       isLanguageInstalled,
-      peripheralCentralId,
       promptInstallLanguage,
     ],
   );
 
   const writeCentralPacket = useCallback(
-    (packetHex: string) => {
-      if (!connectedDeviceId) return Promise.resolve();
+    (deviceId: string, packetHex: string) => {
+      if (!deviceId) return Promise.resolve();
       return writeCharacteristic(
-        connectedDeviceId,
+        deviceId,
         SERVICE_UUID,
         RX_CHARACTERISTIC_UUID,
         packetHex,
         'write',
       );
     },
-    [connectedDeviceId],
+    [],
   );
 
   const notifyPeripheralPacket = useCallback((packetHex: string) => {
@@ -286,7 +313,6 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
     );
   }, []);
 
-  /** Send an arbitrary text string over BLE (typed + voice share this path). */
   const sendText = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
@@ -298,7 +324,8 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
       try {
         await sendHexFramed(
           textToHex(trimmed),
-          writeCentralPacket,
+          (packetHex) =>
+            writeCentralPacket(connectedDeviceId as string, packetHex),
           notifyPeripheralPacket,
           {
             isCentral: !!connectedDeviceId,
@@ -320,37 +347,86 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
     ],
   );
 
-  const disconnectFromDevice = useCallback(async () => {
-    if (connectedDeviceId) {
-      try {
-        await disconnect(connectedDeviceId);
-        console.log('Central disconnected');
-      } catch (error) {
-        console.log('Disconnect error:', error);
+  const sendBroadcast = useCallback(
+    async (envelope: BroadcastEnvelope) => {
+      if (!envelope.message.trim()) return false;
+      if (connectedDeviceIds.length === 0 && peripheralCentralIds.length === 0) {
+        console.log('No connection — cannot broadcast');
+        return false;
       }
+      try {
+        const payload = textToHex(encodeBroadcast(envelope));
+        await Promise.all(
+          connectedDeviceIds.map((deviceId) =>
+            sendHexFramed(
+              payload,
+              (packetHex) => writeCentralPacket(deviceId, packetHex),
+              notifyPeripheralPacket,
+              { isCentral: true },
+            ),
+          ),
+        );
+        if (peripheralCentralIds.length > 0) {
+          await sendHexFramed(payload, () => Promise.resolve(), notifyPeripheralPacket, {
+            isCentral: false,
+          });
+        }
+        if (connectedDeviceIds.length === 0 && peripheralCentralIds.length === 0) {
+          return false;
+        }
+        return true;
+      } catch (error) {
+        console.log('Broadcast failed:', error);
+        return false;
+      }
+    },
+    [
+      connectedDeviceIds,
+      notifyPeripheralPacket,
+      peripheralCentralIds,
+      writeCentralPacket,
+    ],
+  );
+
+  const disconnectFromDevice = useCallback(async () => {
+    if (connectedDeviceIds.length > 0) {
+      await Promise.all(
+        connectedDeviceIds.map(async (deviceId) => {
+          try {
+            await disconnect(deviceId);
+          } catch (error) {
+            console.log('Disconnect error:', error);
+          }
+        }),
+      );
+      removeCentralValueListenersRef.current.forEach((remove) => remove());
+      removeCentralValueListenersRef.current.clear();
       clearConnection();
       return;
     }
 
-    if (peripheralCentralId) {
+    if (peripheralCentralIds.length > 0) {
+      setPeripheralCentralIds([]);
       setPeripheralCentralId(null);
       setMessages([]);
       resetIncomingState();
     }
   }, [
     clearConnection,
-    connectedDeviceId,
-    peripheralCentralId,
+    connectedDeviceIds,
+    peripheralCentralIds,
     resetIncomingState,
     setMessages,
   ]);
 
   const isChatConnected =
-    connectedDeviceId !== null || peripheralCentralId !== null;
+    connectedDeviceIds.length > 0 || peripheralCentralIds.length > 0;
 
   return {
     connectedDeviceId,
+    connectedDeviceIds,
     peripheralCentralId,
+    peripheralCentralIds,
     isConnecting,
     isChatConnected,
     connectToDevice,
@@ -359,5 +435,6 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
     ensurePeripheralListeners,
     sendText,
     sendTextOverBLE: sendText,
+    sendBroadcast,
   };
 }

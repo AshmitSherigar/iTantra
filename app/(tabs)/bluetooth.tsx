@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Linking,
+  Platform,
   ScrollView,
   Text,
   TextInput,
@@ -30,6 +31,7 @@ import {
   useBleMessages,
   useBleModels,
   useBleScanner,
+  registerBroadcastSender,
 } from '../../features/bluetooth';
 
 /**
@@ -133,6 +135,7 @@ export default function BluetoothScreen() {
     disconnectFromDevice,
     ensurePeripheralListeners,
     sendTextOverBLE,
+    sendBroadcast,
   } = useBleConnection({
     handleIncomingHex,
     addMessage,
@@ -142,6 +145,11 @@ export default function BluetoothScreen() {
     isLanguageInstalled: languageInstalled,
     promptInstallLanguage: handlePromptInstall,
   });
+
+  useEffect(() => {
+    if (Platform.OS === 'android') return;
+    return registerBroadcastSender(sendBroadcast);
+  }, [sendBroadcast]);
 
   const {
     devices,

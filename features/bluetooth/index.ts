@@ -8,3 +8,5 @@ export * from './useBleAdvertiser';
 export * from './useBleScanner';
 export * from './useBleConnection';
 export * from './useBleModels';
+export * from './broadcast';
+export { default as AndroidNearbyBroadcastRuntime } from './AndroidNearbyBroadcastRuntime';
