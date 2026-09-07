@@ -21,7 +21,10 @@ import { sendHexFramed } from './transport';
 import { encodeBroadcast, type BroadcastEnvelope } from './broadcast';
 
 type UseBleConnectionOpts = {
-  handleIncomingHex: (hex: string | null | undefined) => void;
+  handleIncomingHex: (
+    hex: string | null | undefined,
+    senderId?: string | null,
+  ) => void;
   addMessage: (text: string, sender: 'me' | 'other') => void;
   clearMessages: () => void;
   setMessages: React.Dispatch<
@@ -60,9 +63,7 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
     incomingHexRef.current = handleIncomingHex;
   }, [handleIncomingHex]);
 
-  const removeCentralValueListenersRef = useRef(
-    new Map<string, () => void>(),
-  );
+  const removeCentralValueListenersRef = useRef(new Map<string, () => void>());
   const connectingDeviceIdsRef = useRef(new Set<string>());
   const removePeripheralWriteListenerRef = useRef<(() => void) | undefined>(
     undefined,
@@ -73,6 +74,21 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
   const removePeripheralUnsubscribedListenerRef = useRef<
     (() => void) | undefined
   >(undefined);
+
+  const pruneCentralLinks = useCallback((ids: string[]) => {
+    if (ids.length === 0) return;
+    const dead = new Set(ids);
+    ids.forEach((id) => {
+      try {
+        removeCentralValueListenersRef.current.get(id)?.();
+      } catch {}
+      removeCentralValueListenersRef.current.delete(id);
+    });
+    setConnectedDeviceIds((current) => current.filter((d) => !dead.has(d)));
+    setConnectedDeviceId((current) =>
+      current && dead.has(current) ? null : current,
+    );
+  }, []);
 
   useEffect(() => {
     const centralListeners = removeCentralValueListenersRef.current;
@@ -90,6 +106,16 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
       } catch {}
     };
   }, []);
+
+  // Drop links the OS reports as gone (out of range / radio drop). Without
+  // this the link counters keep showing "connected" phones that left long
+  // ago — the reported phantom mesh links.
+  useEffect(() => {
+    return addEventListener('deviceDisconnected', (event) => {
+      console.log('BLE link lost:', event.deviceId);
+      pruneCentralLinks([event.deviceId]);
+    });
+  }, [pruneCentralLinks]);
 
   const clearConnection = useCallback(() => {
     setConnectedDeviceIds([]);
@@ -118,7 +144,9 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
           console.log('Ignoring peripheral write: not RX');
           return;
         }
-        incomingHexRef.current(event.value);
+        // Per-sender key: concurrent mesh floods from different phones must
+        // reassemble in isolated buffers, not one shared buffer.
+        incomingHexRef.current(event.value, `peri:${event.centralId}`);
       },
     );
 
@@ -159,7 +187,7 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
         setPeripheralCentralIds((current) => {
           const next = current.filter((id) => id !== event.centralId);
           setPeripheralCentralId((primary) =>
-            primary === event.centralId ? next[0] ?? null : primary,
+            primary === event.centralId ? (next[0] ?? null) : primary,
           );
           return next;
         });
@@ -248,10 +276,13 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
               TX_CHARACTERISTIC_UUID.toLowerCase()
             )
               return;
-            incomingHexRef.current(event.value);
+            incomingHexRef.current(event.value, `central:${event.deviceId}`);
           },
         );
-        removeCentralValueListenersRef.current.set(deviceId, removeValueListener);
+        removeCentralValueListenersRef.current.set(
+          deviceId,
+          removeValueListener,
+        );
 
         await subscribeToCharacteristic(
           deviceId,
@@ -283,11 +314,7 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
         setIsConnecting(false);
       }
     },
-    [
-      connectedDeviceIds,
-      isLanguageInstalled,
-      promptInstallLanguage,
-    ],
+    [connectedDeviceIds, isLanguageInstalled, promptInstallLanguage],
   );
 
   const writeCentralPacket = useCallback(
@@ -347,45 +374,81 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
     ],
   );
 
-  const sendBroadcast = useCallback(
-    async (envelope: BroadcastEnvelope) => {
-      if (!envelope.message.trim()) return false;
-      if (connectedDeviceIds.length === 0 && peripheralCentralIds.length === 0) {
+  /**
+   * Flood one envelope to every open link. Uses allSettled (not all) so one
+   * dead link can't fail the whole round — the old Promise.all reported
+   * failure even when other phones HAD received the message (the "says not
+   * found but it sends" bug). Returns per-link counts for honest UI.
+   */
+  const sendBroadcastDetailed = useCallback(
+    async (
+      envelope: BroadcastEnvelope,
+    ): Promise<{ delivered: number; attempted: number }> => {
+      if (!envelope.message.trim()) return { delivered: 0, attempted: 0 };
+      // Snapshot: state may change mid-flight, count what we tried now.
+      const centrals = [...connectedDeviceIds];
+      const centralSubscribers = peripheralCentralIds.length > 0;
+      const attempted = centrals.length + (centralSubscribers ? 1 : 0);
+      if (attempted === 0) {
         console.log('No connection — cannot broadcast');
-        return false;
+        return { delivered: 0, attempted: 0 };
       }
-      try {
-        const payload = textToHex(encodeBroadcast(envelope));
-        await Promise.all(
-          connectedDeviceIds.map((deviceId) =>
-            sendHexFramed(
-              payload,
-              (packetHex) => writeCentralPacket(deviceId, packetHex),
-              notifyPeripheralPacket,
-              { isCentral: true },
-            ),
+      const payload = textToHex(encodeBroadcast(envelope));
+      const centralOutcomes = await Promise.allSettled(
+        centrals.map((deviceId) =>
+          sendHexFramed(
+            payload,
+            (packetHex) => writeCentralPacket(deviceId, packetHex),
+            notifyPeripheralPacket,
+            { isCentral: true },
           ),
-        );
-        if (peripheralCentralIds.length > 0) {
-          await sendHexFramed(payload, () => Promise.resolve(), notifyPeripheralPacket, {
-            isCentral: false,
-          });
-        }
-        if (connectedDeviceIds.length === 0 && peripheralCentralIds.length === 0) {
-          return false;
-        }
-        return true;
-      } catch (error) {
-        console.log('Broadcast failed:', error);
-        return false;
+        ),
+      );
+      let delivered = 0;
+      const failedIds: string[] = [];
+      centralOutcomes.forEach((outcome, i) => {
+        if (outcome.status === 'fulfilled') delivered += 1;
+        else failedIds.push(centrals[i]);
+      });
+      if (failedIds.length > 0) {
+        // Self-healing: a link that rejects writes is dead (phone walked
+        // away without a clean disconnect event). Prune so counters and
+        // future rounds stop counting it; discovery re-adds it if back.
+        console.log('Pruning dead mesh links:', failedIds.join(', '));
+        pruneCentralLinks(failedIds);
       }
+      if (centralSubscribers) {
+        try {
+          await sendHexFramed(
+            payload,
+            () => Promise.resolve(),
+            notifyPeripheralPacket,
+            {
+              isCentral: false,
+            },
+          );
+          delivered += 1;
+        } catch (error) {
+          console.log('Broadcast notify failed:', error);
+        }
+      }
+      return { delivered, attempted };
     },
     [
       connectedDeviceIds,
       notifyPeripheralPacket,
       peripheralCentralIds,
+      pruneCentralLinks,
       writeCentralPacket,
     ],
+  );
+
+  const sendBroadcast = useCallback(
+    async (envelope: BroadcastEnvelope) => {
+      const { delivered } = await sendBroadcastDetailed(envelope);
+      return delivered > 0;
+    },
+    [sendBroadcastDetailed],
   );
 
   const disconnectFromDevice = useCallback(async () => {
@@ -436,5 +499,6 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
     sendText,
     sendTextOverBLE: sendText,
     sendBroadcast,
+    sendBroadcastDetailed,
   };
 }

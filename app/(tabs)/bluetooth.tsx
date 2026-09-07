@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Linking,
-  Platform,
   ScrollView,
   Text,
   TextInput,
@@ -31,7 +30,6 @@ import {
   useBleMessages,
   useBleModels,
   useBleScanner,
-  registerBroadcastSender,
 } from '../../features/bluetooth';
 
 /**
@@ -135,7 +133,6 @@ export default function BluetoothScreen() {
     disconnectFromDevice,
     ensurePeripheralListeners,
     sendTextOverBLE,
-    sendBroadcast,
   } = useBleConnection({
     handleIncomingHex,
     addMessage,
@@ -146,10 +143,9 @@ export default function BluetoothScreen() {
     promptInstallLanguage: handlePromptInstall,
   });
 
-  useEffect(() => {
-    if (Platform.OS === 'android') return;
-    return registerBroadcastSender(sendBroadcast);
-  }, [sendBroadcast]);
+  // NOTE: homepage mesh broadcast is owned solely by the always-on mesh
+  // runtime (flood to ALL nearby app phones, no manual connect). This screen
+  // keeps the manual 1-to-1 chat only, so it must NOT override that sender.
 
   const {
     devices,
@@ -429,12 +425,13 @@ export default function BluetoothScreen() {
             <View style={styles.sectionHeader}>
               <View>
                 <Text style={[styles.sectionTitle, { color: colors.text }]}>
-                  Nearby Devices
+                  Nearby VaaniSetu Devices
                 </Text>
                 <Text
                   style={[styles.deviceCount, { color: colors.textSecondary }]}
                 >
-                  {devices.length} device{devices.length === 1 ? '' : 's'} found
+                  {devices.length} app device{devices.length === 1 ? '' : 's'}{' '}
+                  found{isScanning ? ' • scanning…' : ''}
                 </Text>
               </View>
 
@@ -487,7 +484,7 @@ export default function BluetoothScreen() {
                   style={{ marginBottom: Spacing.sm }}
                 />
                 <Text style={[styles.emptyStateTitle, { color: colors.text }]}>
-                  No devices found
+                  No VaaniSetu devices found
                 </Text>
                 <Text
                   style={[
@@ -495,7 +492,8 @@ export default function BluetoothScreen() {
                     { color: colors.textSecondary },
                   ]}
                 >
-                  Start a scan to find another Bluetooth Chat device.
+                  Only phones running this app appear here. Ask the other phone
+                  to open the app (mesh runs in the background), then tap Scan.
                 </Text>
               </View>
             ) : (

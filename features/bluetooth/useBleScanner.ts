@@ -5,8 +5,10 @@ import {
   stopScan,
 } from 'react-native-bluetooth-ble';
 import { ensureBleScanPermissions } from './permissions';
+import { SERVICE_UUID } from './constants';
 import {
   getDeviceDisplayName,
+  isVaaniSetuDevice,
   mergeScannedDevice,
   type ScannedDevice,
 } from './devices';
@@ -70,8 +72,19 @@ export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
     }
 
     removeDeviceListenerRef.current = addDeviceFoundListener((device) => {
-      console.log('Device found:', JSON.stringify(device));
       const found = device as unknown as ScannedDevice;
+      // Show ONLY devices running this app. The native scan already filters
+      // by SERVICE_UUID, but some platforms still deliver extras — drop any
+      // result that doesn't advertise our service so random
+      // headphones/speakers/watches never appear in the list.
+      if (!isVaaniSetuDevice(found, SERVICE_UUID)) {
+        return;
+      }
+      console.log(
+        'VaaniSetu device found:',
+        getDeviceDisplayName(found),
+        found.id,
+      );
       setDevices((currentDevices) => {
         const byId = currentDevices.findIndex((d) => d.id === found.id);
         if (byId !== -1) {
@@ -80,7 +93,7 @@ export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
           return updated;
         }
         const incomingName = getDeviceDisplayName(found);
-        if (incomingName !== 'Bluetooth Device') {
+        if (!incomingName.startsWith('VaaniSetu •')) {
           const byName = currentDevices.findIndex(
             (d) => getDeviceDisplayName(d) === incomingName,
           );
@@ -102,8 +115,15 @@ export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
       });
     });
 
-    console.log('Starting scan...');
-    startScan({ allowDuplicates: true, scanMode: 'lowLatency' });
+    console.log('Starting scan (VaaniSetu service only)...');
+    // Native OS-level filter: only wake us for devices advertising our
+    // chat service. This is what hides every non-app BLE device AND is what
+    // lets the OS deliver the scan-response (device name) reliably.
+    startScan({
+      serviceUUIDs: [SERVICE_UUID],
+      allowDuplicates: true,
+      scanMode: 'lowLatency',
+    });
     setIsScanning(true);
     console.log('Scan started');
   }, [isChatConnected, isScanning]);

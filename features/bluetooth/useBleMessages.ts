@@ -6,7 +6,12 @@ import {
   type ChatMessage,
 } from './constants';
 import { cleanDataPacket, hexToText } from './codec';
-import { decodeBroadcast, emitBroadcast } from './broadcast';
+import {
+  containsReplacementChar,
+  decodeBroadcast,
+  emitBroadcast,
+  looksLikeBroadcastJson,
+} from './broadcast';
 import { BleIncomingTextTracker } from '../tts/bleTtsText';
 
 export type StreamTts = {
@@ -21,6 +26,8 @@ type ReassemblyState = {
   total: number;
   chunks: string[];
   timer: ReturnType<typeof setTimeout> | null;
+  /** Once the buffered text looks like broadcast JSON, stop feeding TTS. */
+  suppressStream: boolean;
 };
 
 const emptyState = (): ReassemblyState => ({
@@ -28,13 +35,26 @@ const emptyState = (): ReassemblyState => ({
   total: 0,
   chunks: [],
   timer: null,
+  suppressStream: false,
 });
 
+/**
+ * Incoming BLE text reassembly + streaming TTS feed.
+ *
+ * Reassembly is tracked PER SENDER (centralId/deviceId). The old code kept
+ * a single global buffer, so when two mesh phones transmitted at overlapping
+ * times their chunks interleaved into one corrupt message — heard/spoken as
+ * gibberish. Keying buffers by sender keeps concurrent floods isolated.
+ *
+ * Broadcast envelopes are also kept out of streaming TTS: while chunks
+ * arrive we peek at the decoded prefix, and once it looks like mesh JSON we
+ * stop pushing partial text to speech. The full envelope is still emitted
+ * (Alert + inbox + relay) on completion — just never spoken as raw JSON.
+ */
 export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const reassemblyRef = useRef<ReassemblyState>(emptyState());
-  const trackerRef = useRef(new BleIncomingTextTracker());
-  const seenBroadcastIdsRef = useRef(new Set<string>());
+  const statesRef = useRef(new Map<string, ReassemblyState>());
+  const trackersRef = useRef(new Map<string, BleIncomingTextTracker>());
 
   const addMessage = useCallback(
     (text: string, sender: 'me' | 'other') => {
@@ -47,19 +67,59 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
     [setMessages],
   );
 
-  const clearReassembly = useCallback(() => {
-    const state = reassemblyRef.current;
-    if (state.timer) clearTimeout(state.timer);
-    reassemblyRef.current = emptyState();
+  const getState = useCallback((sender: string): ReassemblyState => {
+    let state = statesRef.current.get(sender);
+    if (!state) {
+      state = emptyState();
+      statesRef.current.set(sender, state);
+    }
+    return state;
+  }, []);
+
+  const getTracker = useCallback((sender: string): BleIncomingTextTracker => {
+    let tracker = trackersRef.current.get(sender);
+    if (!tracker) {
+      tracker = new BleIncomingTextTracker();
+      trackersRef.current.set(sender, tracker);
+    }
+    return tracker;
+  }, []);
+
+  const clearReassembly = useCallback((sender?: string) => {
+    if (sender !== undefined) {
+      const state = statesRef.current.get(sender);
+      if (state?.timer) clearTimeout(state.timer);
+      statesRef.current.delete(sender);
+      trackersRef.current.delete(sender);
+      return;
+    }
+    statesRef.current.forEach((state) => {
+      if (state.timer) clearTimeout(state.timer);
+    });
+    statesRef.current.clear();
+    trackersRef.current.clear();
   }, []);
 
   const handleCompletedText = useCallback(
     (text: string) => {
       const broadcast = decodeBroadcast(text);
       if (broadcast) {
-        if (seenBroadcastIdsRef.current.has(broadcast.id)) return;
-        seenBroadcastIdsRef.current.add(broadcast.id);
+        // Mesh broadcast (homepage flood): shared de-dup lives in
+        // broadcast.ts. emitBroadcast shows the Alert via subscribers AND
+        // triggers the one-time relay to other nearby phones. Duplicates
+        // and our own looped-back echoes return false → stay silent.
         emitBroadcast(broadcast);
+        return;
+      }
+      if (looksLikeBroadcastJson(text)) {
+        // Starts with `{` but isn't a valid envelope → corrupt/truncated
+        // broadcast. Drop silently instead of speaking raw JSON gibberish
+        // as if it were a 1-to-1 chat line.
+        console.warn('Dropping corrupt broadcast-like payload');
+        return;
+      }
+      if (containsReplacementChar(text)) {
+        console.warn('Dropping text with undecodable bytes');
         return;
       }
 
@@ -69,35 +129,40 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
     [addMessage, ttsRef],
   );
 
-  const flushReassembly = useCallback(() => {
-    const state = reassemblyRef.current;
-    if (!state.id || state.chunks.length === 0) {
-      clearReassembly();
-      return;
-    }
-    const joined = state.chunks.join('');
-    const text = hexToText(joined);
-    clearReassembly();
-    ttsRef.current.endStream();
-    if (text) {
-      handleCompletedText(text);
-    } else {
-      console.warn('Discarding undecodable chunked message');
-    }
-  }, [clearReassembly, handleCompletedText, ttsRef]);
+  const flushReassembly = useCallback(
+    (sender: string) => {
+      const state = statesRef.current.get(sender);
+      if (!state?.id || state.chunks.length === 0) {
+        clearReassembly(sender);
+        return;
+      }
+      const joined = state.chunks.join('');
+      const text = hexToText(joined);
+      clearReassembly(sender);
+      ttsRef.current.endStream();
+      if (text) {
+        handleCompletedText(text);
+      } else {
+        console.warn('Discarding undecodable chunked message');
+      }
+    },
+    [clearReassembly, handleCompletedText, ttsRef],
+  );
 
-  const armReassemblyTimeout = useCallback(() => {
-    const state = reassemblyRef.current;
-    if (state.timer) clearTimeout(state.timer);
-    state.timer = setTimeout(() => {
-      console.warn('BLE reassembly timed out — flushing best effort');
-      flushReassembly();
-    }, REASSEMBLY_TIMEOUT_MS);
-  }, [flushReassembly]);
+  const armReassemblyTimeout = useCallback(
+    (sender: string) => {
+      const state = getState(sender);
+      if (state.timer) clearTimeout(state.timer);
+      state.timer = setTimeout(() => {
+        console.warn('BLE reassembly timed out — flushing best effort');
+        flushReassembly(sender);
+      }, REASSEMBLY_TIMEOUT_MS);
+    },
+    [flushReassembly, getState],
+  );
 
   const resetIncomingState = useCallback(() => {
     clearReassembly();
-    trackerRef.current.reset();
     ttsRef.current.endStream();
   }, [clearReassembly, ttsRef]);
 
@@ -106,8 +171,9 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
   }, [setMessages]);
 
   const handleIncomingHex = useCallback(
-    (hex: string | null | undefined) => {
+    (hex: string | null | undefined, senderId?: string | null) => {
       if (hex == null) return;
+      const sender = senderId?.trim() ? senderId.trim() : 'default';
       const text = hexToText(hex);
 
       if (text) {
@@ -119,45 +185,58 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
             console.warn('Ignoring invalid START frame:', text);
             return;
           }
-          clearReassembly();
-          reassemblyRef.current = { id, total, chunks: [], timer: null };
-          trackerRef.current.reset();
+          clearReassembly(sender);
+          statesRef.current.set(sender, {
+            id,
+            total,
+            chunks: [],
+            timer: null,
+            suppressStream: false,
+          });
+          trackersRef.current.delete(sender);
           ttsRef.current.beginStream();
-          armReassemblyTimeout();
+          armReassemblyTimeout(sender);
           return;
         }
         const endMatch = text.match(END_FRAME_RE);
         if (endMatch) {
           const [, id] = endMatch;
-          if (reassemblyRef.current.id !== id) {
+          if (statesRef.current.get(sender)?.id !== id) {
             console.warn('Ignoring END for unknown message:', id);
             return;
           }
-          flushReassembly();
+          flushReassembly(sender);
           return;
         }
       }
 
-      if (reassemblyRef.current.id) {
+      const state = statesRef.current.get(sender);
+      if (state?.id) {
         const clean = cleanDataPacket(hex);
         if (!clean) {
           console.warn('Dropping corrupt data packet during reassembly');
           return;
         }
-        reassemblyRef.current.chunks.push(clean);
-        try {
-          const fresh = trackerRef.current.pushJoinedHex(
-            reassemblyRef.current.chunks.join(''),
-          );
-          if (fresh) ttsRef.current.pushText(fresh);
-        } catch (e) {
-          console.warn('Streaming TTS push failed:', e);
+        state.chunks.push(clean);
+        if (!state.suppressStream) {
+          try {
+            const joined = state.chunks.join('');
+            const tracker = getTracker(sender);
+            const fresh = tracker.pushJoinedHex(joined);
+            // Peek at the full buffered decode: broadcast JSON must never
+            // reach speech, even as partial fragments.
+            if (looksLikeBroadcastJson(tracker.getSpokenText())) {
+              state.suppressStream = true;
+            } else if (fresh) {
+              ttsRef.current.pushText(fresh);
+            }
+          } catch (e) {
+            console.warn('Streaming TTS push failed:', e);
+          }
         }
-        armReassemblyTimeout();
-        if (
-          reassemblyRef.current.chunks.length >= reassemblyRef.current.total
-        ) {
-          flushReassembly();
+        armReassemblyTimeout(sender);
+        if (state.chunks.length >= state.total) {
+          flushReassembly(sender);
         }
         return;
       }
@@ -169,6 +248,7 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
       armReassemblyTimeout,
       clearReassembly,
       flushReassembly,
+      getTracker,
       handleCompletedText,
       ttsRef,
     ],
