@@ -40,3 +40,6 @@ yarn-error.*
 
 # Temporary / backup files
 *.orig.*
+
+
+android/local.properties
