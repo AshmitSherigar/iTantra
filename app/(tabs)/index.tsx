@@ -29,6 +29,7 @@ import { useVoiceMessage } from '../../features/audio/useVoiceMessage';
 import { FontSize, Radius, Spacing } from '../../constants/theme';
 import {
   MESH_DEFAULT_TTL,
+  distanceLabelForRssi,
   getEnvelopeTtl,
   getMeshStatus,
   makeMeshEnvelope,
@@ -241,8 +242,8 @@ export default function Index() {
         );
       } else {
         Alert.alert(
-          'No nearby devices',
-          'No nearby VaaniSetu phone was reachable. Keep Bluetooth + Location ON, keep the app open on both phones, and try again.',
+          'No nearby devices — message saved',
+          'No nearby VaaniSetu phone was reachable. Your message is saved and will send automatically when a phone comes in range. Keep Bluetooth + Location ON and the app open.',
           [{ text: 'OK' }],
         );
       }
@@ -456,7 +457,9 @@ export default function Index() {
                       style={[styles.peerMeta, { color: colors.textSecondary }]}
                       numberOfLines={1}
                     >
-                      {peer.rssi !== undefined ? `${peer.rssi} dBm · ` : ''}
+                      {peer.rssi !== undefined
+                        ? `${distanceLabelForRssi(peer.rssi)} · `
+                        : ''}
                       {shortId(peer.id)}
                     </Text>
                   </View>

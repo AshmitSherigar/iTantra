@@ -1,6 +1,7 @@
 export * from './constants';
 export * from './codec';
 export * from './devices';
+export * from './distance';
 export * from './permissions';
 export * from './transport';
 export * from './useBleMessages';
@@ -10,4 +11,5 @@ export * from './useBleConnection';
 export * from './useBleModels';
 export * from './useMeshSpeech';
 export * from './broadcast';
+export * from './sos';
 export { default as AndroidNearbyBroadcastRuntime } from './AndroidNearbyBroadcastRuntime';

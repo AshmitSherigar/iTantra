@@ -1,9 +1,18 @@
 export const BROADCAST_MESSAGE_TYPE = 'broadcast' as const;
 
-/** How many hops a mesh broadcast may travel (origin → relays). */
+/** How many hops a regular chat broadcast may travel (origin → relays). */
 export const MESH_DEFAULT_TTL = 5;
+/** How many hops an SOS broadcast may travel. Larger because in a disaster
+ *  the mesh is sparse — each extra hop is ~30-50m of extra reach. */
+export const MESH_SOS_TTL = 12;
+/** TTL ceiling for SOS acknowledgements (rescue team → victim). */
+export const MESH_SOS_ACK_TTL = 12;
 /** How long the mesh waits for nearby devices per broadcast attempt. */
 export const MESH_SCAN_WINDOW_MS = 10000;
+
+export type MeshMessageKind = 'chat' | 'sos' | 'sos-ack';
+
+export type SosSeverity = 'critical' | 'urgent';
 
 export type BroadcastEnvelope = {
   type: typeof BROADCAST_MESSAGE_TYPE;
@@ -17,6 +26,32 @@ export type BroadcastEnvelope = {
    * Older app versions omit this field — treat as MESH_DEFAULT_TTL.
    */
   ttl?: number;
+  /**
+   * Message kind. Optional for backward compat: envelopes from older app
+   * versions have no `kind` and are treated as `'chat'`.
+   * - 'chat': regular nearby broadcast (TTL 5)
+   * - 'sos': survivor distress with GPS (TTL 12, relayed first)
+   * - 'sos-ack': rescuer acknowledgement travelling back (TTL 12)
+   */
+  kind?: MeshMessageKind;
+  /** Stable sender id (BLE MACs rotate — this survives address changes). */
+  senderId?: string;
+  /** Origin wall-clock time, epoch ms. Used to sort SOS lists + expire old. */
+  createdAt?: number;
+  /** GPS latitude in degrees, -90…90. Present on 'sos' when fix available. */
+  lat?: number;
+  /** GPS longitude in degrees, -180…180. Present on 'sos' when fix available. */
+  lon?: number;
+  /** GPS accuracy radius in metres, when known. */
+  accuracy?: number;
+  /** Sender battery 0…100, helps NDRF triage dying phones first. */
+  battery?: number;
+  /** People count with the sender, when known. */
+  peopleCount?: number;
+  /** SOS urgency. Defaults to 'critical'. */
+  severity?: SosSeverity;
+  /** For 'sos-ack': the SOS `id` being acknowledged. */
+  ackFor?: string;
 };
 
 type BroadcastSender = (envelope: BroadcastEnvelope) => Promise<boolean>;
@@ -52,15 +87,166 @@ export function makeMeshEnvelope(input: {
     message: input.message,
     language: input.language,
     ttl: MESH_DEFAULT_TTL,
+    kind: 'chat',
+    createdAt: Date.now(),
   };
 }
 
-export function getEnvelopeTtl(envelope: { ttl?: number }): number {
+/** Kind of an envelope; missing `kind` (old app versions) means 'chat'. */
+export function getEnvelopeKind(envelope: { kind?: unknown }): MeshMessageKind {
+  const kind = (envelope as { kind?: unknown })?.kind;
+  if (kind === 'sos' || kind === 'sos-ack') return kind;
+  return 'chat';
+}
+
+export function isSosEnvelope(envelope: { kind?: unknown }): boolean {
+  return getEnvelopeKind(envelope) === 'sos';
+}
+
+export function isSosAckEnvelope(envelope: { kind?: unknown }): boolean {
+  return getEnvelopeKind(envelope) === 'sos-ack';
+}
+
+/** TTL ceiling for a kind: chat travels short, SOS/ACK travel far. */
+export function maxTtlForKind(kind: MeshMessageKind): number {
+  if (kind === 'sos') return MESH_SOS_TTL;
+  if (kind === 'sos-ack') return MESH_SOS_ACK_TTL;
+  return MESH_DEFAULT_TTL;
+}
+
+/** Lower number = transmit/relay first. SOS always beats chat. */
+export function meshPriority(envelope: { kind?: unknown }): number {
+  const kind = getEnvelopeKind(envelope);
+  if (kind === 'sos') return 0;
+  if (kind === 'sos-ack') return 1;
+  return 2;
+}
+
+/** Sort a batch so SOS goes out before ACKs, ACKs before chat. Stable. */
+export function sortByMeshPriority<T extends { kind?: unknown }>(
+  envelopes: T[],
+): T[] {
+  return [...envelopes].sort((a, b) => meshPriority(a) - meshPriority(b));
+}
+
+export function getEnvelopeTtl(envelope: {
+  ttl?: number;
+  kind?: unknown;
+}): number {
+  const ceiling = maxTtlForKind(getEnvelopeKind(envelope));
   const ttl =
     typeof envelope?.ttl === 'number' && Number.isFinite(envelope.ttl)
       ? Math.floor(envelope.ttl)
-      : MESH_DEFAULT_TTL;
-  return Math.max(0, Math.min(ttl, MESH_DEFAULT_TTL));
+      : ceiling;
+  return Math.max(0, Math.min(ttl, ceiling));
+}
+
+/** Hops already consumed, kind-aware (a relayed SOS and chat differ in max). */
+export function envelopeHopsUsed(envelope: {
+  ttl?: number;
+  kind?: unknown;
+}): number {
+  return Math.max(
+    0,
+    maxTtlForKind(getEnvelopeKind(envelope)) - getEnvelopeTtl(envelope),
+  );
+}
+
+export type MakeSosInput = {
+  senderName: string;
+  /** Voice-transcribed or typed distress text. May be empty if GPS only. */
+  message: string;
+  language: string;
+  senderId?: string;
+  lat?: number;
+  lon?: number;
+  accuracy?: number;
+  battery?: number;
+  peopleCount?: number;
+  severity?: SosSeverity;
+};
+
+/**
+ * Build an SOS envelope. GPS is optional (may be unavailable in rubble) —
+ * the envelope is still valid with text only. Callers should pass whatever
+ * fix they have; NDRF triages GPS-tagged first via `hasSosLocation`.
+ */
+export function makeSosEnvelope(input: MakeSosInput): BroadcastEnvelope {
+  return {
+    type: BROADCAST_MESSAGE_TYPE,
+    id: makeBroadcastId(),
+    senderName: input.senderName,
+    message: input.message,
+    language: input.language,
+    ttl: MESH_SOS_TTL,
+    kind: 'sos',
+    senderId: input.senderId?.trim() || undefined,
+    createdAt: Date.now(),
+    lat: input.lat,
+    lon: input.lon,
+    accuracy: input.accuracy,
+    battery: input.battery,
+    peopleCount: input.peopleCount,
+    severity: input.severity ?? 'critical',
+  };
+}
+
+/** Build an NDRF acknowledgement travelling back toward the victim. */
+export function makeSosAckEnvelope(input: {
+  senderName: string;
+  ackFor: string;
+  message?: string;
+  language?: string;
+  senderId?: string;
+}): BroadcastEnvelope {
+  return {
+    type: BROADCAST_MESSAGE_TYPE,
+    id: makeBroadcastId(),
+    senderName: input.senderName,
+    message:
+      input.message?.trim() || 'Rescue team notified. Stay where you are.',
+    language: input.language ?? 'en',
+    ttl: MESH_SOS_ACK_TTL,
+    kind: 'sos-ack',
+    senderId: input.senderId?.trim() || undefined,
+    createdAt: Date.now(),
+    ackFor: input.ackFor,
+  };
+}
+
+/** True when an SOS carries a usable GPS fix. */
+export function hasSosLocation(envelope: {
+  kind?: unknown;
+  lat?: unknown;
+  lon?: unknown;
+}): boolean {
+  if (!isSosEnvelope(envelope)) return false;
+  const { lat, lon } = envelope as { lat?: unknown; lon?: unknown };
+  return (
+    typeof lat === 'number' &&
+    typeof lon === 'number' &&
+    Number.isFinite(lat) &&
+    Number.isFinite(lon) &&
+    lat >= -90 &&
+    lat <= 90 &&
+    lon >= -180 &&
+    lon <= 180
+  );
+}
+
+/** Age of the SOS in ms; null when `createdAt` is missing/invalid. */
+export function sosAgeMs(
+  envelope: { createdAt?: unknown },
+  now: number = Date.now(),
+): number | null {
+  const createdAt = (envelope as { createdAt?: unknown })?.createdAt;
+  if (
+    typeof createdAt !== 'number' ||
+    !Number.isFinite(createdAt) ||
+    createdAt <= 0
+  )
+    return null;
+  return Math.max(0, now - createdAt);
 }
 
 /** Envelope to forward after consuming one hop. Null when TTL is exhausted. */
@@ -125,11 +311,109 @@ export function decodeBroadcast(text: string): BroadcastEnvelope | null {
     ) {
       return null;
     }
+    // Kind: unknown strings fall back to 'chat' so old/new versions interop.
+    const rawKind = (candidate as { kind?: unknown }).kind;
+    const kind: MeshMessageKind =
+      rawKind === 'sos' || rawKind === 'sos-ack' ? rawKind : 'chat';
+    const ceiling = maxTtlForKind(kind);
     const ttl =
       typeof candidate.ttl === 'number' && Number.isFinite(candidate.ttl)
-        ? Math.max(0, Math.min(Math.floor(candidate.ttl), MESH_DEFAULT_TTL))
-        : MESH_DEFAULT_TTL;
-    return { ...(candidate as BroadcastEnvelope), ttl };
+        ? Math.max(0, Math.min(Math.floor(candidate.ttl), ceiling))
+        : ceiling;
+    const out: BroadcastEnvelope = {
+      ...(candidate as BroadcastEnvelope),
+      kind,
+      ttl,
+    };
+
+    // Optional SOS fields: keep only when valid, drop silently otherwise so
+    // one corrupt field never kills the whole distress message.
+    if (typeof candidate.senderId === 'string' && candidate.senderId.trim()) {
+      out.senderId = candidate.senderId.trim().slice(0, 64);
+    } else {
+      delete out.senderId;
+    }
+    if (
+      typeof candidate.createdAt === 'number' &&
+      Number.isFinite(candidate.createdAt) &&
+      candidate.createdAt > 0
+    ) {
+      out.createdAt = Math.floor(candidate.createdAt);
+    } else if (kind !== 'chat') {
+      out.createdAt = Date.now();
+    } else {
+      delete out.createdAt;
+    }
+    const lat = candidate.lat;
+    const lon = candidate.lon;
+    if (
+      typeof lat === 'number' &&
+      typeof lon === 'number' &&
+      Number.isFinite(lat) &&
+      Number.isFinite(lon) &&
+      lat >= -90 &&
+      lat <= 90 &&
+      lon >= -180 &&
+      lon <= 180
+    ) {
+      out.lat = lat;
+      out.lon = lon;
+    } else {
+      delete out.lat;
+      delete out.lon;
+    }
+    if (
+      typeof candidate.accuracy === 'number' &&
+      Number.isFinite(candidate.accuracy) &&
+      candidate.accuracy > 0
+    ) {
+      out.accuracy = candidate.accuracy;
+    } else {
+      delete out.accuracy;
+    }
+    if (
+      typeof candidate.battery === 'number' &&
+      Number.isFinite(candidate.battery)
+    ) {
+      out.battery = Math.max(0, Math.min(100, Math.round(candidate.battery)));
+    } else {
+      delete out.battery;
+    }
+    if (
+      typeof candidate.peopleCount === 'number' &&
+      Number.isFinite(candidate.peopleCount) &&
+      candidate.peopleCount > 0
+    ) {
+      out.peopleCount = Math.min(999, Math.floor(candidate.peopleCount));
+    } else {
+      delete out.peopleCount;
+    }
+    out.severity =
+      candidate.severity === 'urgent'
+        ? 'urgent'
+        : kind === 'sos'
+          ? 'critical'
+          : undefined;
+    if (kind !== 'sos') delete (out as { severity?: unknown }).severity;
+    if (
+      kind === 'sos-ack' &&
+      typeof candidate.ackFor === 'string' &&
+      candidate.ackFor.trim()
+    ) {
+      out.ackFor = candidate.ackFor.trim().slice(0, 64);
+    } else {
+      delete out.ackFor;
+    }
+    if (kind === 'chat') {
+      delete out.senderId;
+      delete out.lat;
+      delete out.lon;
+      delete out.accuracy;
+      delete out.battery;
+      delete out.peopleCount;
+      delete out.ackFor;
+    }
+    return out;
   } catch {
     return null;
   }

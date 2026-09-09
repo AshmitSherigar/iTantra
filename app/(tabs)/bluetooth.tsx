@@ -23,6 +23,7 @@ import { styles } from './bluetooth.styles';
 
 import {
   MAX_ADVERTISED_NAME_LEN,
+  distanceLabelForRssi,
   getDeviceDisplayName,
   promptInstallLanguage,
   useBleAdvertiser,
@@ -531,7 +532,7 @@ export default function BluetoothScreen() {
                             { color: colors.textSecondary },
                           ]}
                         >
-                          Signal: {device.rssi} dBm
+                          Est. distance: {distanceLabelForRssi(device.rssi)}
                         </Text>
                       )}
                     </View>

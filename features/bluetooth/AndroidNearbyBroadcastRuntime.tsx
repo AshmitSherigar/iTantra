@@ -2,12 +2,22 @@ import { useCallback, useEffect, useRef } from 'react';
 
 import {
   MESH_SCAN_WINDOW_MS,
+  getEnvelopeKind,
   getMeshStatus,
+  isSosAckEnvelope,
+  isSosEnvelope,
   publishMeshStatus,
   registerBroadcastRelay,
   registerBroadcastSender,
   registerMeshDiscovery,
+  subscribeToBroadcasts,
 } from './broadcast';
+import {
+  getPendingSos,
+  queuePendingSos,
+  removePendingSos,
+  resolvePendingSosWithAck,
+} from './sos';
 import type { BroadcastEnvelope } from './broadcast';
 import { useBleAdvertiser } from './useBleAdvertiser';
 import { useBleConnection } from './useBleConnection';
@@ -30,6 +40,10 @@ const sleep = (ms: number) =>
 const MAX_MESH_LINKS = 6;
 /** Fixed filtered-scan window per flood/discovery round. */
 const SCAN_WINDOW_MS = 3500;
+/** Min gap between automatic store-and-forward retry rounds. */
+const RETRY_COOLDOWN_MS = 15000;
+/** Max queued envelopes re-flooded per retry round (SOS goes first). */
+const MAX_RETRY_PER_ROUND = 5;
 
 /**
  * Homepage mesh runtime (flood broadcast, no manual pairing).
@@ -271,7 +285,7 @@ export default function AndroidNearbyBroadcastRuntime() {
           ? delivered === attempted
             ? `Sent to ${delivered} nearby ${delivered === 1 ? 'phone' : 'phones'}.`
             : `Reached ${delivered} of ${attempted} links — the rest may still get it via relay.`
-          : 'No nearby VaaniSetu device was reachable. Keep Bluetooth + Location on and try again.',
+          : 'No nearby VaaniSetu device was reachable. Message saved — it will send automatically when a phone appears.',
       });
       return sent;
     },
@@ -285,13 +299,30 @@ export default function AndroidNearbyBroadcastRuntime() {
 
   // Origin path: homepage Broadcast button → flood to ALL nearby app phones.
   // No manual Connect needed; we discover + link on demand each time.
+  // Store-and-forward: SOS is ALWAYS queued (it must survive until an
+  // sos-ack or expiry — the victim may meet new phones later). Chat/ACK is
+  // queued only when this round delivered to zero links.
   const sendWhenReady = useCallback(async (envelope: BroadcastEnvelope) => {
     try {
-      return await floodRoundRef.current(envelope, true);
+      const sent = await floodRoundRef.current(envelope, true);
+      try {
+        if (getEnvelopeKind(envelope) === 'sos') {
+          await queuePendingSos(envelope);
+        } else if (sent) {
+          await removePendingSos(envelope.id);
+        } else {
+          await queuePendingSos(envelope);
+        }
+      } catch {}
+      return sent;
     } catch (error) {
       console.warn('[Mesh] origin flood failed:', error);
+      try {
+        await queuePendingSos(envelope);
+      } catch {}
       publishMeshStatus({
-        lastResult: 'Broadcast failed. Check Bluetooth and try again.',
+        lastResult:
+          'No phones in range — message saved, it will send automatically when one appears.',
       });
       return false;
     }
@@ -353,6 +384,68 @@ export default function AndroidNearbyBroadcastRuntime() {
       }),
     [],
   );
+
+  // Incoming sos-ack resolves the matching queued SOS so this phone stops
+  // re-flooding "help me" once rescue is confirmed.
+  // Relay-side carry: every NEW incoming SOS/ACK is also persisted, so this
+  // phone re-floods it to future peers even if the origin is gone (true
+  // delay-tolerant carry). Own looped-back echoes never reach here —
+  // emitBroadcast drops already-seen ids before notifying listeners — so the
+  // origin can't re-queue itself. Chat is NOT carried, only SOS traffic.
+  useEffect(
+    () =>
+      subscribeToBroadcasts((envelope) => {
+        if (isSosAckEnvelope(envelope)) {
+          void resolvePendingSosWithAck(envelope).catch(() => {});
+          void queuePendingSos(envelope).catch(() => {});
+        } else if (isSosEnvelope(envelope)) {
+          void queuePendingSos(envelope).catch(() => {});
+        }
+      }),
+    [],
+  );
+
+  // Store-and-forward retry: when genuinely NEW phones appear and unsent
+  // envelopes are queued, re-flood (SOS first). Cooldown + per-round cap +
+  // in-flight guard keep a crowded room from causing a retry storm.
+  const seenPeerIdsRef = useRef(new Set<string>());
+  const lastAutoRetryRef = useRef(0);
+  const autoRetryActiveRef = useRef(false);
+  useEffect(() => {
+    const fresh = devices.filter((d) => !seenPeerIdsRef.current.has(d.id));
+    devices.forEach((d) => {
+      seenPeerIdsRef.current.add(d.id);
+      if (seenPeerIdsRef.current.size > 500) {
+        const first = seenPeerIdsRef.current.values().next().value;
+        if (first !== undefined) seenPeerIdsRef.current.delete(first);
+      }
+    });
+    if (fresh.length === 0 || autoRetryActiveRef.current) return;
+    if (Date.now() - lastAutoRetryRef.current < RETRY_COOLDOWN_MS) return;
+    autoRetryActiveRef.current = true;
+    lastAutoRetryRef.current = Date.now();
+    void (async () => {
+      try {
+        const pending = await getPendingSos();
+        if (pending.length === 0) return;
+        console.log(
+          `[Mesh] ${fresh.length} new peer(s) — retrying ${Math.min(pending.length, MAX_RETRY_PER_ROUND)} queued message(s)`,
+        );
+        for (const env of pending.slice(0, MAX_RETRY_PER_ROUND)) {
+          try {
+            const sent = await floodRoundRef.current(env, false);
+            // SOS stays queued until an sos-ack (more phones may still
+            // arrive); chat/ack leaves the queue once delivered.
+            if (sent && getEnvelopeKind(env) !== 'sos') {
+              await removePendingSos(env.id);
+            }
+          } catch {}
+        }
+      } finally {
+        autoRetryActiveRef.current = false;
+      }
+    })();
+  }, [devices]);
 
   return null;
 }
