@@ -10,7 +10,10 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.anonymous.lowlatencysttapp"
+      "bundleIdentifier": "com.anonymous.lowlatencysttapp",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "VaaniSetu attaches your GPS location to SOS distress broadcasts so rescuers can find you without internet."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -52,8 +55,12 @@
         }
       ],
       "expo-asset",
-      "./plugins/withSherpaModelAssets"
+      "./plugins/withSherpaModelAssets",
+      "./plugins/withKwsAssets"
     ],
+    "extra": {
+      "porcupineAccessKey": ""
+    },
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true

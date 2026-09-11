@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -39,6 +40,8 @@ import {
   subscribeToMeshStatus,
   useMeshSpeech,
 } from '../../features/bluetooth';
+import { sendDistressSos, useSosSender } from '../../features/sos';
+import { useDistressCountdown, useKeywordListener } from '../../features/kws';
 import type { BroadcastEnvelope, MeshStatus } from '../../features/bluetooth';
 
 type ReceivedMeshMessage = BroadcastEnvelope & {
@@ -154,6 +157,72 @@ export default function Index() {
     meshSpeechRef.current.stop();
     setMeshInbox([]);
   }, []);
+
+  // Survivor SOS: one tap → GPS fix (best-effort) + voice text → SOS flood
+  // with 12-hop TTL, queued + carried until an sos-ack resolves it.
+  const sos = useSosSender(selectedLanguage.id);
+
+  // Keyword trigger → 15s cancel window → SOS auto-send (same pipeline as
+  // the manual button). Listener pauses while the mic is busy recording.
+  const handleDistressTimeout = useCallback(
+    async (label: string) => {
+      try {
+        const { sent } = await sendDistressSos({
+          message: `Distress keyword heard ("${label}"). I need help. I may be trapped.`,
+          language: selectedLanguage.id,
+        });
+        Alert.alert(
+          sent ? 'SOS auto-sent' : 'SOS saved — will auto-send',
+          sent
+            ? 'The distress word triggered an SOS. Nearby phones are relaying it. Cancel it from the SOS card if this was a mistake.'
+            : 'No phones in range yet. The SOS is saved and will send automatically when one appears.',
+          [{ text: 'OK' }],
+        );
+      } catch {
+        Alert.alert(
+          'SOS failed',
+          'The distress word was heard but sending failed. Open the app and use the SOS button.',
+          [{ text: 'OK' }],
+        );
+      }
+    },
+    [selectedLanguage.id],
+  );
+
+  const distress = useDistressCountdown({ onTimeout: handleDistressTimeout });
+  const distressTriggerRef = useRef(distress.trigger);
+  distressTriggerRef.current = distress.trigger;
+  const kws = useKeywordListener({
+    paused: isRecording || isTranscribing,
+    onDetect: (label) => distressTriggerRef.current(label),
+  });
+
+  const handleSosPress = useCallback(() => {
+    if (sos.phase === 'locating' || sos.phase === 'sending') return;
+    Alert.alert(
+      'Send SOS distress?',
+      'Broadcasts your voice message with your GPS location to all nearby VaaniSetu phones, which relay it further. Works without internet.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Send SOS',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              const sent = await sos.sendSos(transcript);
+              Alert.alert(
+                sent ? 'SOS broadcasting' : 'SOS saved — will auto-send',
+                sent
+                  ? 'Nearby phones are receiving it and relaying it further. Keep the app open.'
+                  : 'No phones in range yet. Your SOS is saved and will send automatically when one appears. Keep Bluetooth + Location ON.',
+                [{ text: 'OK' }],
+              );
+            })();
+          },
+        },
+      ],
+    );
+  }, [sos, transcript]);
 
   const status: 'ready' | 'listening' | 'processing' | 'error' = isRecording
     ? 'listening'
@@ -378,6 +447,128 @@ export default function Index() {
           <Text style={[styles.resultLine, { color: colors.textSecondary }]}>
             {meshStatus.lastResult}
           </Text>
+        ) : null}
+
+        <View
+          style={[
+            styles.sosCard,
+            {
+              backgroundColor: colors.surface,
+              borderColor:
+                sos.phase === 'active' ? colors.error : colors.border,
+            },
+          ]}
+        >
+          {sos.phase === 'active' ? (
+            <View style={styles.sosActiveRow}>
+              <View
+                style={[styles.sosDot, { backgroundColor: colors.error }]}
+              />
+              <View style={styles.peerInfo}>
+                <Text style={[styles.peerName, { color: colors.error }]}>
+                  SOS ACTIVE • relaying…
+                </Text>
+                <Text
+                  style={[styles.peerMeta, { color: colors.textSecondary }]}
+                  numberOfLines={2}
+                >
+                  {sos.fix
+                    ? `GPS ±${Math.round(sos.fix.accuracy ?? 50)}m • ${sos.fix.lat.toFixed(5)}, ${sos.fix.lon.toFixed(5)}`
+                    : 'Sent without GPS — keep Location ON for a fix'}
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => void sos.cancelSos()}
+                activeOpacity={0.6}
+                hitSlop={10}
+              >
+                <Text style={[styles.clearText, { color: colors.error }]}>
+                  Stop
+                </Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View>
+              <Pressable
+                onPress={handleSosPress}
+                disabled={sos.phase !== 'idle'}
+                style={({ pressed }) => [
+                  styles.sosButton,
+                  {
+                    backgroundColor: colors.error,
+                    opacity: sos.phase !== 'idle' ? 0.7 : pressed ? 0.86 : 1,
+                  },
+                ]}
+              >
+                {sos.phase === 'idle' ? (
+                  <Ionicons name="warning-outline" size={18} color="#FFFFFF" />
+                ) : (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                )}
+                <Text style={styles.broadcastText}>
+                  {sos.phase === 'locating'
+                    ? 'Getting GPS…'
+                    : sos.phase === 'sending'
+                      ? 'Sending SOS…'
+                      : 'SOS — Send distress + GPS'}
+                </Text>
+              </Pressable>
+              <Text style={[styles.sosHint, { color: colors.textSecondary }]}>
+                Sends your message with GPS to nearby phones — no internet
+                needed. Phones relay it further.
+              </Text>
+              {sos.error ? (
+                <Text style={[styles.errorLine, { color: colors.error }]}>
+                  {sos.error}
+                </Text>
+              ) : null}
+            </View>
+          )}
+        </View>
+
+        {kws.status !== 'unsupported' ? (
+          <View
+            style={[
+              styles.listCard,
+              {
+                backgroundColor: colors.surface,
+                borderColor: colors.border,
+                marginTop: Spacing.md,
+              },
+            ]}
+          >
+            <View style={styles.voiceRow}>
+              <Ionicons
+                name={kws.enabled ? 'ear-outline' : 'ear'}
+                size={18}
+                color={kws.enabled ? colors.error : colors.textSecondary}
+              />
+              <View style={styles.peerInfo}>
+                <Text style={[styles.peerName, { color: colors.text }]}>
+                  Distress word
+                </Text>
+                <Text
+                  style={[styles.peerMeta, { color: colors.textSecondary }]}
+                  numberOfLines={2}
+                >
+                  {kws.status === 'listening'
+                    ? `Listening for ${kws.keywordLabels.map((l) => `"${l}"`).join(' • ')}${kws.micPaused ? ' • paused while recording' : ''}`
+                    : kws.status === 'starting'
+                      ? 'Starting listener…'
+                      : kws.status === 'missing-setup'
+                        ? 'Needs setup: AccessKey + .ppn files'
+                        : kws.status === 'error'
+                          ? (kws.error ?? 'Listener failed')
+                          : 'Listens for a distress word, then counts down to SOS'}
+                </Text>
+              </View>
+              <Switch
+                value={kws.enabled}
+                onValueChange={kws.setEnabled}
+                trackColor={{ true: colors.error, false: colors.border }}
+              />
+            </View>
+          </View>
         ) : null}
 
         <View style={styles.section}>
@@ -607,6 +798,67 @@ export default function Index() {
         ) : null}
       </ScrollView>
 
+      <Modal
+        visible={distress.confirming !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => distress.cancel()}
+      >
+        <View style={styles.distressOverlay}>
+          <View
+            style={[
+              styles.distressBox,
+              {
+                backgroundColor: colors.surface,
+                borderColor: colors.error,
+              },
+            ]}
+          >
+            <Ionicons name="warning" size={44} color={colors.error} />
+            <Text style={[styles.distressTitle, { color: colors.text }]}>
+              Distress word heard
+            </Text>
+            {distress.confirming ? (
+              <Text
+                style={[styles.distressPhrase, { color: colors.textSecondary }]}
+              >
+                “{distress.confirming.label}”
+              </Text>
+            ) : null}
+            <Text style={[styles.distressTimer, { color: colors.error }]}>
+              {distress.confirming?.secondsLeft ?? 15}s
+            </Text>
+            <Text
+              style={[styles.distressHint, { color: colors.textSecondary }]}
+            >
+              SOS with your GPS sends automatically — cancel if you are safe.
+            </Text>
+            <Pressable
+              onPress={() => distress.cancel()}
+              style={({ pressed }) => [
+                styles.distressCancel,
+                { opacity: pressed ? 0.86 : 1 },
+              ]}
+            >
+              <Text style={styles.broadcastText}>I&apos;m safe — Cancel</Text>
+            </Pressable>
+            <TouchableOpacity
+              onPress={() => {
+                const label = distress.confirming?.label ?? 'distress word';
+                distress.cancel();
+                void handleDistressTimeout(label);
+              }}
+              activeOpacity={0.6}
+              style={styles.distressSendNow}
+            >
+              <Text style={[styles.clearText, { color: colors.error }]}>
+                Send SOS now
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       <View
         style={[
           styles.micDock,
@@ -704,6 +956,96 @@ const styles = StyleSheet.create({
   broadcastText: {
     fontSize: FontSize.medium,
     fontWeight: '700',
+  },
+
+  sosCard: {
+    marginTop: Spacing.md,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    padding: Spacing.md,
+  },
+
+  sosButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    height: 52,
+    borderRadius: Radius.round,
+  },
+
+  sosHint: {
+    marginTop: Spacing.sm,
+    fontSize: 12,
+    lineHeight: 17,
+    textAlign: 'center',
+  },
+
+  sosActiveRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+
+  sosDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+
+  distressOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: Spacing.lg,
+  },
+
+  distressBox: {
+    width: '100%',
+    borderRadius: Radius.lg,
+    borderWidth: 2,
+    padding: Spacing.lg,
+    alignItems: 'center',
+    gap: 8,
+  },
+
+  distressTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+  },
+
+  distressPhrase: {
+    fontSize: 15,
+    fontStyle: 'italic',
+  },
+
+  distressTimer: {
+    fontSize: 64,
+    fontWeight: '900',
+    fontVariant: ['tabular-nums'],
+  },
+
+  distressHint: {
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: 'center',
+  },
+
+  distressCancel: {
+    marginTop: Spacing.sm,
+    width: '100%',
+    height: 54,
+    borderRadius: Radius.round,
+    backgroundColor: '#16A34A',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  distressSendNow: {
+    marginTop: Spacing.sm,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
   },
 
   resultLine: {
