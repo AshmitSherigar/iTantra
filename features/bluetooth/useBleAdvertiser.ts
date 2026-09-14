@@ -12,8 +12,9 @@ import {
   RX_CHARACTERISTIC_UUID,
   SERVICE_UUID,
   TX_CHARACTERISTIC_UUID,
-} from './constants';
-import { ensureBleAdvertisePermissions } from './permissions';
+} from '@/features/bluetooth/constants';
+import { ensureBleAdvertisePermissions } from '@/features/bluetooth/permissions';
+import { logger } from '@/utils/logger';
 
 export function getNameToAdvertise(
   raw: string | undefined,
@@ -56,12 +57,12 @@ export function useBleAdvertiser() {
     try {
       stopAdvertising();
     } catch (error) {
-      console.log('Stop advertising error:', error);
+      logger.warn('Bluetooth', 'Stop advertising failed', error);
     }
     advertisedNameRef.current = null;
     setAdvertisedName(null);
     setBluetoothReady(false);
-    console.log('BLUETOOTH STOPPED');
+    logger.info('Bluetooth', 'Advertising stopped');
   }, []);
 
   const startBluetooth = useCallback(async () => {
@@ -71,13 +72,17 @@ export function useBleAdvertiser() {
     if (startingRef.current || isStartingBt) return;
     const nameToAdvertise = getNameToAdvertise(undefined, displayName);
     if (bluetoothReady && advertisedNameRef.current === nameToAdvertise) {
-      console.log('Already advertising as', nameToAdvertise);
+      logger.debug('Bluetooth', 'Already advertising', {
+        name: nameToAdvertise,
+      });
       return;
     }
     // Name changed -> restart with the new name instead of stacking a second
     // advertiser.
     if (bluetoothReady) {
-      console.log('Name changed, restarting advertising as', nameToAdvertise);
+      logger.info('Bluetooth', 'Name changed; restarting advertising', {
+        name: nameToAdvertise,
+      });
       stopBluetooth();
     }
 
@@ -85,7 +90,7 @@ export function useBleAdvertiser() {
     setIsStartingBt(true);
     setBtError(null);
     try {
-      console.log('BLUETOOTH START');
+      logger.info('Bluetooth', 'Starting advertising');
       // FIX: requests BT + Location (new Android needs both for scan AND
       // advertise); shows a Settings deep-link when permanently denied.
       const granted = await ensureBleAdvertisePermissions();
@@ -93,7 +98,7 @@ export function useBleAdvertiser() {
         const msg =
           'Bluetooth permission denied. Allow Bluetooth + Location (and turn Location services ON) to advertise and scan.';
         setBtError(msg);
-        console.log('Permission denied');
+        logger.warn('Bluetooth', 'Advertising permission denied');
         return;
       }
 
@@ -104,7 +109,7 @@ export function useBleAdvertiser() {
         const msg =
           'Bluetooth is turned off. Turn it on in system settings, then tap Start again.';
         setBtError(msg);
-        console.log('Bluetooth disabled');
+        logger.warn('Bluetooth', 'Bluetooth is disabled');
         Alert.alert(
           'Bluetooth is off',
           'This app cannot switch system Bluetooth on by itself. Please turn Bluetooth on, then tap Start Bluetooth again.',
@@ -142,12 +147,12 @@ export function useBleAdvertiser() {
       advertisedNameRef.current = nameToAdvertise;
       setAdvertisedName(nameToAdvertise);
       setBluetoothReady(true);
-      console.log('BLUETOOTH READY as', nameToAdvertise);
+      logger.info('Bluetooth', 'Advertising ready', { name: nameToAdvertise });
     } catch (error) {
       const msg =
         'Bluetooth setup failed. Make sure Bluetooth is on and try again.';
       setBtError(msg);
-      console.log('Bluetooth setup failed:', error);
+      logger.error('Bluetooth', 'Advertising setup failed', error);
     } finally {
       startingRef.current = false;
       setIsStartingBt(false);

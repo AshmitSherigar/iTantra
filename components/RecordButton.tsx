@@ -1,9 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { FontSize, Radius, Spacing } from '../constants/theme';
+import { FontSize, Radius, Spacing } from '@/constants/theme';
 
-import { useTheme } from '../context/ThemeContext';
+import { useTheme } from '@/context/ThemeContext';
 
 type RecordButtonProps = {
   isRecording: boolean;

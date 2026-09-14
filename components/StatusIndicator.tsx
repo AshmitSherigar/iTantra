@@ -1,8 +1,8 @@
 import { StyleSheet, Text, View } from 'react-native';
 
-import { FontSize, Spacing } from '../constants/theme';
+import { FontSize, Spacing } from '@/constants/theme';
 
-import { useTheme } from '../context/ThemeContext';
+import { useTheme } from '@/context/ThemeContext';
 
 type Status = 'ready' | 'listening' | 'processing' | 'error';
 

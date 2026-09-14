@@ -15,20 +15,15 @@ import {
   isLanguageInstalled,
   type LanguageId,
   type LanguageModel,
-} from '../features/models/languages';
+} from '@/features/models/languages';
 
 const STORAGE_KEY = 'app:selected-language';
 
 type LanguageContextType = {
-  /** Raw id, e.g. 'en'. Defaults to English on first launch. */
   selectedId: LanguageId;
-  /** Full registry entry for the selected language. */
   selectedLanguage: LanguageModel;
-  /** False until the persisted value (or default) has loaded. */
   isLoaded: boolean;
-  /** Persist a new selection. */
   selectLanguage: (id: LanguageId) => Promise<void>;
-  /** Whether the selected language's models ship with the app. */
   isSelectedInstalled: boolean;
 };
 
@@ -42,7 +37,6 @@ function isValidId(v: string | null): v is LanguageId {
 }
 
 export function LanguageProvider({ children }: { children: React.ReactNode }) {
-  // Default to English immediately so the UI never renders "no language".
   const [selectedId, setSelectedId] = useState<LanguageId>(DEFAULT_LANGUAGE_ID);
   const [isLoaded, setIsLoaded] = useState(false);
 

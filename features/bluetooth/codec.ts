@@ -1,5 +1,6 @@
 import { Buffer } from 'buffer';
-import { MAX_HEX_PER_PACKET } from './constants';
+import { MAX_HEX_PER_PACKET } from '@/features/bluetooth/constants';
+import { logger } from '@/utils/logger';
 
 export const delay = (ms: number) =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -27,16 +28,16 @@ export function hexToText(hex: string | null | undefined): string | null {
     const clean = cleanHex(hex);
     if (!clean) return null;
     if (clean.length % 2 !== 0) {
-      console.warn('Dropping odd-length hex payload');
+      logger.warn('Bluetooth', 'Dropping odd-length hex payload');
       return null;
     }
     if (!/^[0-9a-f]*$/.test(clean)) {
-      console.warn('Dropping non-hex payload');
+      logger.warn('Bluetooth', 'Dropping non-hex payload');
       return null;
     }
     return Buffer.from(clean, 'hex').toString('utf-8');
   } catch (e) {
-    console.warn('Failed to decode hex to text:', e);
+    logger.warn('Bluetooth', 'Failed to decode hex to text', e);
     return null;
   }
 }

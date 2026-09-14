@@ -4,34 +4,33 @@ import {
   startScan,
   stopScan,
 } from 'react-native-bluetooth-ble';
-import { SERVICE_UUID } from './constants';
-import { ensureBleScanPermissions } from './permissions';
+import { SERVICE_UUID } from '@/features/bluetooth/constants';
+import { ensureBleScanPermissions } from '@/features/bluetooth/permissions';
 import {
   getDeviceDisplayName,
   mergeScannedDevice,
   type ScannedDevice,
-} from './devices';
+} from '@/features/bluetooth/devices';
+import { logger } from '@/utils/logger';
 
 type UseBleScannerOpts = {
   isChatConnected: boolean;
 };
 
-/**
- * Central role — discovery only.
- * FIX: requests BT + Location before every scan (new Android returns zero
- * results without the location grant, even though the old code asked nothing).
- */
 export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
   const [devices, setDevices] = useState<ScannedDevice[]>([]);
   const [isScanning, setIsScanning] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const removeDeviceListenerRef = useRef<(() => void) | undefined>(undefined);
+  const scanStartingRef = useRef(false);
+  const scanAttemptRef = useRef(0);
 
   const stopScanning = useCallback(async () => {
+    scanAttemptRef.current += 1;
     try {
       await stopScan();
     } catch (error) {
-      console.log('Stop scan error:', error);
+      logger.warn('Bluetooth', 'Stop scan failed', error);
     }
 
     if (removeDeviceListenerRef.current) {
@@ -40,7 +39,7 @@ export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
     }
 
     setIsScanning(false);
-    console.log('Scan stopped');
+    logger.info('Bluetooth', 'Scan stopped');
   }, []);
 
   // Stop scanning when the screen unmounts.
@@ -54,88 +53,104 @@ export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
   }, []);
 
   const scanForDevices = useCallback(async () => {
-    if (isScanning) return;
+    if (isScanning || scanStartingRef.current) return;
     if (isChatConnected) {
-      console.log('Already connected');
+      logger.debug('Bluetooth', 'Scan skipped because chat is connected');
       return;
     }
-    setScanError(null);
+    scanStartingRef.current = true;
+    const attempt = ++scanAttemptRef.current;
 
-    // NEW ANDROID FIX — without this the app never showed a location prompt
-    // and `startScan` silently discovered nothing.
-    const allowed = await ensureBleScanPermissions();
-    if (!allowed) {
-      setScanError(
-        'Location permission is required for Bluetooth scanning. Grant it, turn Location services ON, then scan again.',
-      );
-      return;
-    }
+    try {
+      setScanError(null);
 
-    setDevices([]);
+      const allowed = await ensureBleScanPermissions();
+      if (!allowed) {
+        setScanError(
+          'Location permission is required for Bluetooth scanning. Grant it, turn Location services ON, then scan again.',
+        );
+        return;
+      }
+      if (attempt !== scanAttemptRef.current) return;
 
-    if (removeDeviceListenerRef.current) {
-      removeDeviceListenerRef.current();
-      removeDeviceListenerRef.current = undefined;
-    }
+      setDevices([]);
 
-    removeDeviceListenerRef.current = addDeviceFoundListener((device) => {
-      console.log('Device found:', JSON.stringify(device));
-      const found = device as unknown as ScannedDevice;
-      setDevices((currentDevices) => {
-        const byId = currentDevices.findIndex((d) => d.id === found.id);
-        if (byId !== -1) {
-          // allowDuplicates delivers the same id again, often with the local
-          // name filled in on the second callback — merge instead of dropping.
-          const updated = [...currentDevices];
-          updated[byId] = mergeScannedDevice(currentDevices[byId], found);
-          return updated;
-        }
-        // BLE privacy: Android/iOS rotate the advertised MAC/UUID, so tapping
-        // "Start Bluetooth" again on the peer shows up as a NEW id with the
-        // SAME name. Collapse those instead of listing the phone N times.
-        const incomingName = getDeviceDisplayName(found);
-        if (incomingName !== 'Bluetooth Device') {
-          const byName = currentDevices.findIndex(
-            (d) => getDeviceDisplayName(d) === incomingName,
-          );
-          if (byName !== -1) {
-            console.log(
-              `Address rotated for "${incomingName}": ${currentDevices[byName].id} -> ${found.id}`,
-            );
+      if (removeDeviceListenerRef.current) {
+        removeDeviceListenerRef.current();
+        removeDeviceListenerRef.current = undefined;
+      }
+
+      removeDeviceListenerRef.current = addDeviceFoundListener((device) => {
+        logger.debug('Bluetooth', 'Device found', {
+          id: device.id,
+          name: getDeviceDisplayName(device as unknown as ScannedDevice),
+        });
+        const found = device as unknown as ScannedDevice;
+        setDevices((currentDevices) => {
+          const byId = currentDevices.findIndex((d) => d.id === found.id);
+          if (byId !== -1) {
+            // allowDuplicates delivers the same id again, often with the local
             const updated = [...currentDevices];
-            updated[byName] = mergeScannedDevice(
-              { ...currentDevices[byName], id: found.id },
-              found,
-            );
-            updated[byName].id = found.id;
+            updated[byId] = mergeScannedDevice(currentDevices[byId], found);
             return updated;
           }
-        }
-        // Cap growth in crowded areas.
-        if (currentDevices.length >= 50) return currentDevices;
-        return [...currentDevices, found];
+          const incomingName = getDeviceDisplayName(found);
+          if (incomingName !== 'Bluetooth Device') {
+            const byName = currentDevices.findIndex(
+              (d) => getDeviceDisplayName(d) === incomingName,
+            );
+            if (byName !== -1) {
+              logger.info('Bluetooth', 'Device address rotated', {
+                name: incomingName,
+              });
+              const updated = [...currentDevices];
+              updated[byName] = mergeScannedDevice(
+                { ...currentDevices[byName], id: found.id },
+                found,
+              );
+              updated[byName].id = found.id;
+              return updated;
+            }
+          }
+          // Cap growth in crowded areas.
+          if (currentDevices.length >= 50) return currentDevices;
+          return [...currentDevices, found];
+        });
       });
-    });
 
-    console.log('Starting scan...');
-    // Filter by our chat service so random nameless BLE peripherals
-    // (TVs, watches, beacons) don't fill the list. allowDuplicates must be
-    // true: the first callback for a peer often has no name yet and the
-    // scan-response carrying the local name arrives right after.
-    try {
-      await startScan({
-        serviceUUIDs: [SERVICE_UUID],
-        allowDuplicates: true,
-        scanMode: 'lowLatency',
-      });
-    } catch (e) {
-      // Fall back to an unfiltered scan if the device rejects the filter
-      // (some Android stacks do) — names still resolve via merge logic.
-      console.log('Filtered scan failed, retrying unfiltered:', e);
-      await startScan({ allowDuplicates: true, scanMode: 'lowLatency' });
+      logger.info('Bluetooth', 'Starting scan');
+      // Filter by our chat service so random nameless BLE peripherals
+      try {
+        await startScan({
+          serviceUUIDs: [SERVICE_UUID],
+          allowDuplicates: true,
+          scanMode: 'lowLatency',
+        });
+      } catch (e) {
+        // Fall back to an unfiltered scan if the device rejects the filter
+        // (some Android stacks do) — names still resolve via merge logic.
+        logger.warn(
+          'Bluetooth',
+          'Filtered scan failed; retrying unfiltered',
+          e,
+        );
+        await startScan({ allowDuplicates: true, scanMode: 'lowLatency' });
+      }
+      if (attempt !== scanAttemptRef.current) {
+        await stopScan();
+        return;
+      }
+      setIsScanning(true);
+      logger.info('Bluetooth', 'Scan started');
+    } catch (error) {
+      removeDeviceListenerRef.current?.();
+      removeDeviceListenerRef.current = undefined;
+      setIsScanning(false);
+      setScanError('Bluetooth scan failed. Try again.');
+      logger.error('Bluetooth', 'Scan failed', error);
+    } finally {
+      scanStartingRef.current = false;
     }
-    setIsScanning(true);
-    console.log('Scan started');
   }, [isChatConnected, isScanning]);
 
   return {
