@@ -43,11 +43,6 @@ function pickName(prevVal: unknown, nextVal: unknown): string | undefined {
   return next || prev || undefined;
 }
 
-/**
- * Merge a repeat sighting of the same peripheral.
- * allowDuplicates delivers the same id again, often with the local name
- * filled in only on the second callback — merge instead of dropping.
- */
 export function mergeScannedDevice(
   prev: ScannedDevice,
   next: ScannedDevice,

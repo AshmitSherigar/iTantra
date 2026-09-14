@@ -1,53 +1,26 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { Platform } from 'react-native';
 import { Audio } from 'expo-av';
-
 import { createPcmLiveStream } from 'react-native-sherpa-onnx/audio';
 import type { PcmLiveStreamHandle } from 'react-native-sherpa-onnx/audio';
-import { sttEngine } from '../stt/stt-engine';
+import { sttEngine } from '@/features/stt/STTEngine';
+import { logger } from '@/utils/logger';
 
 export type UseVoiceMessageReturn = {
-  /** Whether the microphone is actively recording. */
   isRecording: boolean;
-  /** Whether the STT engine is finalising transcription after recording stops. */
   isTranscribing: boolean;
-  /** Partial (live) transcript while recording. (Not supported with offline model, always empty) */
   partialText: string;
-  /** Last error message, if any. */
   error: string | null;
-  /** STT model loaded and ready (loaded lazily after BLE connect to save RAM). */
   sttReady: boolean;
-  /** STT model is currently loading. */
   sttLoading: boolean;
-  /** Last STT init/runtime error, if any. */
   sttError: string | null;
-  /** Last successfully transcribed text (also returned by stopVoice). */
   lastTranscript: string;
-  /** Start recording the user's voice. */
   startVoice: () => Promise<void>;
-  /**
-   * Stop recording, perform transcription, and return the text.
-   * Returns `null` when transcription fails or produces no output.
-   */
   stopVoice: () => Promise<string | null>;
-  /**
-   * Preload the STT model for one language (call when BLE devices connect).
-   * Idempotent per path — pass the selected language's `sttAssetPath` so
-   * ONLY that model (~200MB) ever lives in RAM.
-   */
-  ensureSttReady: (modelPath?: string) => Promise<void>;
-  /** Free STT native memory (call on BLE disconnect). */
+  ensureSttReady: (modelPath?: string) => Promise<boolean>;
   releaseStt: () => Promise<void>;
 };
 
-/**
- * Hook that captures microphone audio via Sherpa ONNX's native PCM live stream
- * and performs offline STT using the IndicConformer model.
- *
- * The STT model (~200MB) is NOT loaded here — call `ensureSttReady()` after
- * the two BLE devices connect, and `releaseStt()` on disconnect, so RAM is
- * only held while a chat peer exists.
- */
 export function useVoiceMessage(): UseVoiceMessageReturn {
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -61,9 +34,6 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
   const micRef = useRef<PcmLiveStreamHandle | null>(null);
   const removeDataListenerRef = useRef<(() => void) | null>(null);
   const removeErrorListenerRef = useRef<(() => void) | null>(null);
-  // Guards the async gap between tap and `mic.start()` resolving — a second
-  // tap in that window would otherwise open a second native AudioRecord,
-  // which hard-crashes the app on Android.
   const startingRef = useRef(false);
 
   const teardownMicListeners = useCallback(() => {
@@ -79,7 +49,7 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
 
   // Terminal-only logging (Metro/Logcat). Nothing is rendered in-app.
   const pushLog = useCallback((line: string) => {
-    console.log(line);
+    logger.info('Audio', line);
   }, []);
 
   const refreshSttState = useCallback(() => {
@@ -89,7 +59,6 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
     setSttError(s.lastError);
   }, []);
 
-  // Clean up on unmount
   useEffect(() => {
     return () => {
       try {
@@ -104,14 +73,14 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
 
   const ensureSttReady = useCallback(
     async (modelPath?: string) => {
-      if (Platform.OS === 'web') return;
+      if (Platform.OS === 'web') return false;
       // Already holding the requested language — nothing to do.
       if (
         sttEngine.isInitialized() &&
         (!modelPath || sttEngine.getActiveModelPath() === modelPath)
       ) {
         refreshSttState();
-        return;
+        return true;
       }
       setSttLoading(true);
       setSttError(null);
@@ -121,10 +90,12 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
       try {
         await sttEngine.ensureInitialized(modelPath as string | undefined);
         pushLog('[STT] Speech model ready.');
+        return true;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         pushLog(`[STT] Model load FAILED: ${msg}`);
         setSttError(msg);
+        return false;
       } finally {
         refreshSttState();
       }
@@ -149,8 +120,6 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
       return;
     }
     // No double-start: a second native AudioRecord while one is live
-    // hard-crashes Android (and a tap during the permission dialog would
-    // otherwise do exactly that).
     if (startingRef.current || micRef.current) {
       return;
     }
@@ -161,8 +130,6 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
       audioChunksRef.current = [];
       totalSamplesRef.current = 0;
 
-      // Staged markers: a native kill preserves already-flushed Metro logs,
-      // so the LAST visible marker tells us exactly which call died.
       pushLog('[Mic] step=permission-request');
       // 1. Request microphone permissions
       const { granted } = await Audio.requestPermissionsAsync();
@@ -183,10 +150,7 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
           playThroughEarpieceAndroid: false,
         });
       } catch (e) {
-        console.warn(
-          '[useVoiceMessage] setAudioModeAsync failed (ignored):',
-          e,
-        );
+        logger.warn('Audio', 'setAudioModeAsync failed (ignored)', e);
       }
       pushLog('[Mic] step=create-stream');
 
@@ -195,15 +159,13 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
       micRef.current = mic;
 
       // 4. Accumulate PCM chunks in memory
-      removeDataListenerRef.current = mic.onData(
-        (samples: Float32Array, sampleRate: number) => {
-          audioChunksRef.current.push(samples);
-          totalSamplesRef.current += samples.length;
-        },
-      );
+      removeDataListenerRef.current = mic.onData((samples: Float32Array) => {
+        audioChunksRef.current.push(samples);
+        totalSamplesRef.current += samples.length;
+      });
 
       removeErrorListenerRef.current = mic.onError((message: string) => {
-        console.error('[useVoiceMessage] Mic error:', message);
+        logger.error('Audio', 'Microphone error', message);
         setError(`Mic error: ${message}`);
       });
 
@@ -217,10 +179,20 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
       // Start failed — release everything so a later stop()/unmount never
       // calls native stop() on a stream that isn't running (also a native
       // crash vector) and a retry starts from a clean handle.
+      const failedMic = micRef.current;
       teardownMicListeners();
       micRef.current = null;
+      try {
+        await failedMic?.stop();
+      } catch (cleanupError) {
+        logger.warn(
+          'Audio',
+          'Failed to clean up microphone after startup failure',
+          cleanupError,
+        );
+      }
       const msg = err instanceof Error ? err.message : String(err);
-      console.error('[useVoiceMessage] startVoice failed:', msg);
+      logger.error('Audio', 'startVoice failed', msg);
       setError(msg);
       setIsRecording(false);
     } finally {
@@ -234,8 +206,7 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
     setIsRecording(false);
 
     try {
-      // 1. Stop mic capture (never let a native stop() rejection escape —
-      // it would surface as an unhandled rejection on some builds).
+      // 1. Stop mic capture
       teardownMicListeners();
 
       const mic = micRef.current;
@@ -244,7 +215,7 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
         try {
           await mic.stop();
         } catch (e) {
-          console.warn('[useVoiceMessage] mic stop failed (ignored):', e);
+          logger.warn('Audio', 'Microphone stop failed (ignored)', e);
         }
       }
 
@@ -267,16 +238,12 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
         `[STT] Captured ${samplesArray.length} samples (${(samplesArray.length / 16000).toFixed(1)}s). Transcribing…`,
       );
 
-      // 3. Transcribe using the offline engine (lazy-loads model if needed)
+      // 3. Transcribe using the selected offline model.
       if (!sttEngine.isInitialized()) {
-        pushLog('[STT] Model not loaded yet — loading now (first use)…');
-        setSttLoading(true);
-        try {
-          await sttEngine.ensureInitialized();
-          pushLog('[STT] Speech model ready.');
-        } finally {
-          refreshSttState();
-        }
+        const msg = 'Speech model is not ready.';
+        setError(msg);
+        refreshSttState();
+        return null;
       }
       const text = await sttEngine.transcribeSamples(samplesArray, 16000);
 
@@ -294,7 +261,7 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
       return finalText;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error('[useVoiceMessage] stopVoice failed:', msg);
+      logger.error('Audio', 'stopVoice failed', msg);
       pushLog(`[STT] Transcription FAILED: ${msg}`);
       setError(`Transcription failed: ${msg}`);
       refreshSttState();

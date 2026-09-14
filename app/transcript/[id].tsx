@@ -1,9 +1,9 @@
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
 
-import { FontSize, Radius, Spacing } from '../../constants/theme';
+import { FontSize, Radius, Spacing } from '@/constants/theme';
 
-import { useTheme } from '../../context/ThemeContext';
+import { useTheme } from '@/context/ThemeContext';
 
 export default function TranscriptDetails() {
   const { id } = useLocalSearchParams<{ id: string }>();

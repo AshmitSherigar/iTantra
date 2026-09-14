@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Appearance as RNAppearance } from 'react-native';
 
-import { Colors } from '../constants/theme';
+import { Colors } from '@/constants/theme';
 
 type ThemeMode = 'Light' | 'Dark' | 'System Default';
 

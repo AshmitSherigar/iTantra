@@ -6,15 +6,14 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import React from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { useLanguage } from '../../context/LanguageContext';
-import { useTheme } from '../../context/ThemeContext';
+import { useLanguage } from '@/context/LanguageContext';
+import { useTheme } from '@/context/ThemeContext';
 import {
   SUPPORTED_LANGUAGES,
   isLanguageInstalled,
-} from '../../features/models/languages';
+} from '@/features/models/languages';
 
 export default function LanguageScreen() {
   const { colors } = useTheme();

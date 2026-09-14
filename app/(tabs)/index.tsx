@@ -15,11 +15,12 @@ import RecordButton from '@/components/RecordButton';
 import TranscriptBox from '@/components/TranscriptBox';
 import StatusIndicator from '@/components/StatusIndicator';
 
-import { useTheme } from '../../context/ThemeContext';
-import { useLanguage } from '../../context/LanguageContext';
-import { isLanguageInstalled } from '../../features/models/languages';
-import { useVoiceMessage } from '../../features/audio/useVoiceMessage';
-import { FontSize, Radius, Spacing } from '../../constants/theme';
+import { useTheme } from '@/context/ThemeContext';
+import { useLanguage } from '@/context/LanguageContext';
+import { isLanguageInstalled } from '@/features/models/languages';
+import { useVoiceMessage } from '@/features/audio/useVoiceMessage';
+import { FontSize, Radius, Spacing } from '@/constants/theme';
+import { logger } from '@/utils/logger';
 
 export default function Index() {
   const { colors } = useTheme();
@@ -43,8 +44,6 @@ export default function Index() {
   const sttModelPath = selectedLanguage.sttAssetPath;
 
   // Preload the selected language's STT model so the mic is low-latency.
-  // Idempotent: STTEngine keeps only one model in RAM and no-ops when the
-  // requested path is already loaded.
   useEffect(() => {
     if (!languageInstalled || !sttModelPath) return;
     void ensureSttReady(sttModelPath);
@@ -100,19 +99,19 @@ export default function Index() {
       promptInstallLanguage();
       return;
     }
-
-    // Make sure the STT engine holds THIS language (switches + frees the
-    // previous ~200MB model when the user changed language in Settings).
     setTranscript('');
-    await ensureSttReady(sttModelPath);
+    const ready = await ensureSttReady(sttModelPath);
+    if (!ready) return;
     await startVoice();
   }
 
   function handleBroadcast() {
     const message = transcript.trim();
     if (!message) return;
-    // TODO: broadcast `message` (+ selectedLanguage.id) to the Bluetooth mesh.
-    console.log(`[Broadcast] mesh send (${selectedLanguage.id}): "${message}"`);
+    logger.debug('Broadcast', 'Mesh message sent', {
+      language: selectedLanguage.id,
+      characterCount: message.length,
+    });
     Alert.alert(
       'Broadcast',
       'Bluetooth mesh broadcast will be implemented later.',
@@ -186,7 +185,6 @@ export default function Index() {
           }
         />
 
-        {/* Broadcast to Bluetooth mesh (implementation later) */}
         <Pressable
           onPress={handleBroadcast}
           disabled={!canBroadcast}
@@ -238,7 +236,6 @@ export default function Index() {
           </Text>
         </Pressable>
       ) : null}
-      {/* Recording Area */}
       <View
         style={[
           styles.recordingCard,
@@ -303,28 +300,12 @@ const styles = StyleSheet.create({
     paddingTop: Spacing.md,
     paddingBottom: Spacing.lg,
   },
-
-  greeting: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 1.2,
-  },
-
   title: {
     marginTop: 4,
     fontSize: 28,
     fontWeight: '800',
     letterSpacing: -0.5,
   },
-
-  headerIcon: {
-    width: 46,
-    height: 46,
-    borderRadius: Radius.md,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
   transcriptSection: {
     flex: 1,
     minHeight: 220,
@@ -350,13 +331,6 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     borderRadius: Radius.sm,
   },
-
-  badgeDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-
   liveText: {
     fontSize: 9,
     fontWeight: '800',

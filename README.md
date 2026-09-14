@@ -1,4 +1,4 @@
-# Low-Latency STT App
+# VaaniSetu
 
 A React Native mobile application built with **Expo**, designed for low-latency, on-device speech-to-text (STT).
 
@@ -51,18 +51,6 @@ npm run ios
 
 This starts Expo with the iOS target.
 
-### Web
-
-```bash
-npm run web
-```
-
-This starts the application in a web browser in localhost:8081.
-
-> The primary target of this project is mobile. Web support is mainly useful for development and testing.
-
----
-
 ## Code Quality
 
 ### Lint
@@ -80,7 +68,6 @@ npm run format
 ```
 
 Formats the project using Prettier.
-
 This command modifies files when formatting changes are required.
 
 ### Check Formatting
@@ -90,7 +77,6 @@ npm run format:check
 ```
 
 Checks whether files are correctly formatted without modifying them.
-
 This is useful in CI because the build should fail if formatting is incorrect.
 
 ---
@@ -137,11 +123,10 @@ The same checks are also performed by GitHub Actions.
 ## Project Structure
 
 ```text
-low-latency-stt-app/
+vaani-setu/
 │
 ├── app/                  # Expo Router screens and routes
 ├── assets/               # Images, fonts, and other static assets
-├── scripts/              # Project utility scripts
 │
 ├── .github/
 │   └── workflows/        # GitHub Actions CI

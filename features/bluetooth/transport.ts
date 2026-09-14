@@ -1,5 +1,13 @@
-import { CHUNK_DELAY_MS, MAX_HEX_PER_PACKET } from './constants';
-import { delay, makeFrameId, splitHexIntoPackets, textToHex } from './codec';
+import {
+  CHUNK_DELAY_MS,
+  MAX_HEX_PER_PACKET,
+} from '@/features/bluetooth/constants';
+import {
+  delay,
+  makeFrameId,
+  splitHexIntoPackets,
+  textToHex,
+} from '@/features/bluetooth/codec';
 
 export type PacketWriter = (packetHex: string) => Promise<void>;
 
