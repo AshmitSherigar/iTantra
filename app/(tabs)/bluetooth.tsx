@@ -195,7 +195,7 @@ export default function BluetoothScreen() {
     startVoice,
     stopTts,
     stopVoice,
-    languageInstalled
+    languageInstalled,
   ]);
 
   return (

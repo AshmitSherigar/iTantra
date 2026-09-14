@@ -66,5 +66,4 @@ export class BleIncomingTextTracker {
     this.spokenHexLength = completeHexLength;
     return fresh;
   }
-
 }
