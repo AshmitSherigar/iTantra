@@ -6,31 +6,12 @@ import type {
   StreamingTtsEngine,
   TtsStreamController,
 } from 'react-native-sherpa-onnx/tts';
-import { ITTSService, HindiTTSConfig, TTSStatus } from './types';
+import { ITTSService, HindiTTSConfig, TTSStatus } from '@/features/tts/types';
+import { logger } from '@/utils/logger';
 
-// Target size for one smooth native synthesis. Fewer, larger generations
-// = fewer inter-chunk pauses. Native streams PCM progressively inside a
-// generation, so a 300-400 char request still starts playing quickly.
 const MIN_STREAM_CHARS = 120;
 const MAX_SYNTHESIS_CHARS = 400;
 
-/**
- * Split `buffer` into speakable chunks + remainder.
- *
- * - Complete sentences ending in । . ! ? \n are emitted immediately.
- * - If no sentence boundary is available yet but the buffer is long,
- *   split at the last space so speech can still start early
- *   (important for packet-streamed BLE messages without punctuation).
- *
- * Chunk sizing matters for gapless playback: every emitted chunk becomes
- * (or joins) a separate native `generateSpeechStream` call, and each call
- * boundary can produce an audible pause (model setup + sentence silence
- * padding + PCM buffer drain). So we deliberately wait for fairly large
- * chunks (~120 chars) instead of tiny 30-40 char fragments — fewer
- * generations = fewer pauses. Native VITS already streams audio
- * sentence-by-sentence inside a single generation, so bigger requests
- * still start playing fast (low time-to-first-byte).
- */
 export function extractSpeakableChunks(buffer: string): {
   chunks: string[];
   remainder: string;
@@ -38,8 +19,6 @@ export function extractSpeakableChunks(buffer: string): {
   const chunks: string[] = [];
   let rest = buffer;
 
-  // Pull off complete sentences first.
-  // Matches runs of chars terminated by a sentence ender.
   const sentenceRe = /[^।.!?\n]+[।.!?\n]+/g;
   let lastEnd = 0;
   let m: RegExpExecArray | null;
@@ -53,10 +32,6 @@ export function extractSpeakableChunks(buffer: string): {
     rest = rest.slice(lastEnd);
   }
 
-  // If we already have one or more complete sentences, coalesce small
-  // sentences into fewer, larger chunks. Without this a big message like
-  // "राम ...। श्याम ...। ..." becomes N tiny native generations with a
-  // pause between each — the reported "reads few words then stops".
   const coalesced: string[] = [];
   if (chunks.length > 0) {
     let current = '';
@@ -77,16 +52,11 @@ export function extractSpeakableChunks(buffer: string): {
     chunks.length = 0;
     chunks.push(...coalesced);
     // Sentences were emitted — keep the (possibly empty) tail as remainder
-    // unless it is itself long enough to speak (handled below).
     if (!rest.trim()) {
       return { chunks, remainder: '' };
     }
   }
 
-  // No full sentence yet — but if the tail is getting long, speak up to
-  // the last word boundary so playback still starts before END arrives.
-  // Threshold is intentionally large (~120 chars ≈ 8-12s of Hindi speech
-  // per generation is still small for VITS) to avoid tiny fragments.
   if (rest.length >= MIN_STREAM_CHARS) {
     // Prefer a secondary phrase boundary (comma/semicolon/colon/dash) in
     // the second half so mid-sentence cuts land on a natural pause.
@@ -118,7 +88,6 @@ export function extractSpeakableChunks(buffer: string): {
 const DEFAULT_SID = 0;
 const DEFAULT_SPEED = 1.0;
 
-/** Default TTS asset dir (English). Kept in sync with features/models/languages.ts. */
 export const DEFAULT_TTS_MODEL_PATH = 'models/tts/tts-eng';
 
 class HindiTTS implements ITTSService {
@@ -131,43 +100,27 @@ class HindiTTS implements ITTSService {
     queueLength: 0,
   };
 
-  // Sequential synthesis queue. Only one generateSpeechStream runs at a
-  // time (native rejects concurrent streams); the PCM player stays open
-  // across queued items so audio plays gaplessly.
   private queue: string[] = [];
   private isPumping = false;
   private pcmActive = false;
-  // Serializes AudioTrack writes so PCM chunks from native callbacks land
-  // in order. Without this, fire-and-forget writes from rapid onChunk
-  // events can interleave across chunk boundaries (stutter/gaps), and the
-  // pump can start the next generation while the previous tail is still
-  // being written.
   private pcmWriteChain: Promise<void> = Promise.resolve();
-  // Resolver for the in-flight synthesizeOne — lets stop() force-resolve a
-  // synthesis whose native end/error event never arrives after cancel().
   private currentDone: (() => void) | null = null;
 
-  // Partial text for the current packet-streamed utterance that has not
-  // yet formed a speakable chunk.
   private streamBuffer = '';
-
-  private sid = DEFAULT_SID;
-  private speed = DEFAULT_SPEED;
 
   async initialize(config?: HindiTTSConfig): Promise<void> {
     const modelPath = config?.modelPath ?? DEFAULT_TTS_MODEL_PATH;
 
-    // Idempotent for the same language; switching languages frees the old
-    // native engine FIRST so peak RAM never holds two (~228MB would OOM).
     if (this.status.isInitialized && this.activeModelPath === modelPath) {
       if (config?.debug)
-        console.log(`[VoiceTTS] Already initialized (${modelPath}).`);
+        logger.debug('TTS', 'Already initialized', { modelPath });
       return;
     }
     if (this.status.isInitialized && this.activeModelPath !== modelPath) {
-      console.log(
-        `[VoiceTTS] Switching model ${this.activeModelPath} -> ${modelPath}: releasing old engine first`,
-      );
+      logger.info('TTS', 'Switching model and releasing old engine first', {
+        previousModel: this.activeModelPath,
+        nextModel: modelPath,
+      });
       await this.destroy();
     }
 
@@ -175,28 +128,23 @@ class HindiTTS implements ITTSService {
       const modelPathConfig = { type: 'asset', path: modelPath } as const;
 
       if (config?.debug) {
-        console.log('[VoiceTTS] Detecting model...');
+        logger.debug('TTS', 'Detecting model');
         const detection = await detectTtsModel(modelPathConfig);
-        console.log('[VoiceTTS] Detection result:', detection);
+        logger.debug('TTS', 'Model detection completed', detection);
       }
 
-      // Staged markers: a native kill preserves already-flushed logs, so the
-      // last visible marker pinpoints a native loader crash.
-      console.log(`[VoiceTTS] step=create (${modelPath})`);
+      logger.info('TTS', 'Creating voice engine', { modelPath });
       this.engine = await createStreamingTTS({
         modelPath: modelPathConfig,
         modelType: 'vits',
         provider: 'cpu',
-        // 4 threads keeps VITS synthesis ahead of realtime playback on
-        // modern phones. With 2 threads long messages synthesize slower
-        // than they play → PCM underrun → "few words, pause, few words".
         numThreads: 4,
         debug: config?.debug ?? false,
       });
 
-      console.log(
-        `[VoiceTTS] step=created (${modelPath}), reading model info…`,
-      );
+      logger.debug('TTS', 'Voice engine created; reading model info', {
+        modelPath,
+      });
       const { sampleRate, numSpeakers } = await this.engine.getModelInfo();
       this.activeModelPath = modelPath;
       this.status = {
@@ -208,23 +156,19 @@ class HindiTTS implements ITTSService {
       };
 
       if (config?.debug) {
-        console.log(
-          `[VoiceTTS] Initialized successfully (${modelPath}). Sample Rate: ${sampleRate}, Speakers: ${numSpeakers}`,
-        );
+        logger.info('TTS', 'Initialized successfully', {
+          modelPath,
+          sampleRate,
+          numSpeakers,
+        });
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       this.activeModelPath = null;
       this.status.error = errorMsg;
-      if (config?.debug)
-        console.error('[VoiceTTS] Initialization failed:', errorMsg);
+      if (config?.debug) logger.error('TTS', 'Initialization failed', errorMsg);
       throw err;
     }
-  }
-
-  setVoice(sid: number, speed = 1.0): void {
-    this.sid = sid;
-    this.speed = speed;
   }
 
   /** Interrupt everything and speak `text` right away. */
@@ -235,33 +179,20 @@ class HindiTTS implements ITTSService {
     const clean = text?.trim();
     if (!clean) return;
 
-    // Interrupt: drop queued + buffered speech, cancel in-flight synthesis.
     await this.stop();
 
     this.queue = [clean];
     this.pumpQueue();
   }
 
-  /** Queue a complete message behind anything currently playing. */
   enqueueSpeak(text: string): void {
     if (!this.engine || !this.status.isInitialized) return;
     const clean = text?.trim();
     if (!clean) return;
-    // Send big messages as ONE (or few large) native generations, not many
-    // tiny ones. Native VITS already streams PCM sentence-by-sentence
-    // inside a single generateSpeechStream, so a large request still starts
-    // playing fast but has no inter-generation pauses. Splitting here was
-    // the main cause of "reads few words then stops" on long messages.
     for (const part of this.splitForSynthesis(clean)) this.queue.push(part);
     this.syncStatus();
     this.pumpQueue();
   }
-
-  /**
-   * Split only when the text is very long, keeping each native request in
-   * the smooth range (<= MAX_SYNTHESIS_CHARS) at sentence boundaries.
-   * Short/medium messages always stay a single generation (gapless).
-   */
   private splitForSynthesis(text: string): string[] {
     if (text.length <= MAX_SYNTHESIS_CHARS) return [text];
     const { chunks, remainder } = extractSpeakableChunks(text);
@@ -279,7 +210,6 @@ class HindiTTS implements ITTSService {
       if (candidate.length > MAX_SYNTHESIS_CHARS) {
         flush();
         current = c;
-        // A single sentence longer than max — hard-split at word boundary.
         while (current.length > MAX_SYNTHESIS_CHARS) {
           const cut = current.lastIndexOf(' ', MAX_SYNTHESIS_CHARS);
           const at = cut > 10 ? cut : MAX_SYNTHESIS_CHARS;
@@ -294,20 +224,13 @@ class HindiTTS implements ITTSService {
     return parts.length > 0 ? parts : [text];
   }
 
-  /** Begin a new incremental utterance (e.g. a new BLE message). */
   startStreamingUtterance(): void {
-    // Flush any leftover from a previous utterance that never got END.
     if (this.streamBuffer.trim()) {
       this.finishStreamingUtterance();
     }
     this.streamBuffer = '';
   }
 
-  /**
-   * Feed newly-decoded text from incoming BLE packets. Speakable units
-   * are queued immediately — this is what makes speech start while later
-   * packets are still in flight.
-   */
   appendStreamingText(partialText: string): void {
     if (!this.engine || !this.status.isInitialized) return;
     if (!partialText) return;
@@ -332,9 +255,6 @@ class HindiTTS implements ITTSService {
     const tail = this.streamBuffer.trim();
     this.streamBuffer = '';
     if (tail) {
-      // Merge a tiny tail into the last queued item when it fits — avoids
-      // one extra short native generation (audible pause) at the end of
-      // every long message.
       const last = this.queue[this.queue.length - 1];
       if (last && `${last} ${tail}`.length <= MAX_SYNTHESIS_CHARS) {
         this.queue[this.queue.length - 1] = `${last} ${tail}`;
@@ -351,15 +271,6 @@ class HindiTTS implements ITTSService {
     this.status.queueLength = this.queue.length + (this.isPumping ? 1 : 0);
   }
 
-  /**
-   * Sequentially synthesize everything in `queue`. Resolves when drained;
-   * concurrent callers are coalesced via `isPumping`.
-   *
-   * Pending items are coalesced into a single generation (up to
-   * MAX_SYNTHESIS_CHARS) so a big message that arrived as several small
-   * streaming pushes is still synthesized in few large requests — this is
-   * what removes the pause-between-every-few-words on long messages.
-   */
   private pumpQueue(): void {
     if (this.isPumping) return;
     if (!this.engine || !this.status.isInitialized) return;
@@ -376,18 +287,15 @@ class HindiTTS implements ITTSService {
           try {
             await this.synthesizeOne(text);
           } catch (err) {
-            console.error('[VoiceTTS] Synthesis failed for chunk:', err);
+            logger.error('TTS', 'Synthesis failed for chunk', err);
             // Continue with the rest of the queue instead of stalling.
           }
         }
       } finally {
         this.isPumping = false;
         // Keep the player open only while there is work; otherwise stop
-        // so the audio device is released (incoming mic recording, etc).
         if (this.queue.length === 0 && this.pcmActive) {
           try {
-            // Drain any in-flight PCM writes before releasing the player
-            // so the tail of a long message is not cut off.
             await this.pcmWriteChain;
             await this.engine?.stopPcmPlayer();
           } catch {
@@ -400,7 +308,6 @@ class HindiTTS implements ITTSService {
     })();
   }
 
-  /** Pop 1+ queued items merged into one smooth synthesis request. */
   private takeNextBatch(): string {
     const first = this.queue.shift()!;
     let batch = first;
@@ -414,11 +321,6 @@ class HindiTTS implements ITTSService {
     return batch;
   }
 
-  /**
-   * Synthesize a single chunk and stream its PCM to the player.
-   * Resolves when native signals onEnd / onError / cancel — after all
-   * queued PCM writes for this chunk have been flushed in order.
-   */
   private synthesizeOne(text: string): Promise<void> {
     return new Promise<void>((resolve) => {
       const engine = this.engine;
@@ -431,9 +333,6 @@ class HindiTTS implements ITTSService {
       const done = () => {
         if (!settled) {
           settled = true;
-          // Ensure the last PCM tail is actually written before the pump
-          // starts the next generation; otherwise the next chunk's audio
-          // can race ahead and sound like a stutter/gap.
           void this.pcmWriteChain.then(() => {
             this.currentStream = null;
             this.currentDone = null;
@@ -460,29 +359,26 @@ class HindiTTS implements ITTSService {
 
           this.currentStream = await engine.generateSpeechStream(
             text,
-            { sid: this.sid, speed: this.speed },
+            { sid: DEFAULT_SID, speed: DEFAULT_SPEED },
             {
               onChunk: (chunk) => {
                 if (!chunk.samples || chunk.samples.length === 0) return;
-                // Chain writes to preserve order across rapid callbacks.
-                // WRITE_BLOCKING on native applies backpressure so the
-                // AudioTrack buffer stays fed without overlap.
                 this.pcmWriteChain = this.pcmWriteChain
                   .then(() => engine.writePcmChunk(chunk.samples))
                   .catch((err) => {
-                    console.error('[VoiceTTS] Error writing PCM chunk:', err);
+                    logger.error('TTS', 'Error writing PCM chunk', err);
                   });
               },
               onEnd: () => done(),
               onError: (event) => {
-                console.error('[VoiceTTS] Stream error:', event.message);
+                logger.error('TTS', 'Stream error', event.message);
                 this.status.error = event.message;
                 done();
               },
             },
           );
         } catch (err) {
-          console.error('[VoiceTTS] generateSpeechStream failed:', err);
+          logger.error('TTS', 'generateSpeechStream failed', err);
           done();
         }
       })();
@@ -492,8 +388,6 @@ class HindiTTS implements ITTSService {
   async stop(): Promise<void> {
     this.queue = [];
     this.streamBuffer = '';
-    // Drop any chained PCM writes from the cancelled utterance so a new
-    // speak() starts from a clean, resolved chain.
     this.pcmWriteChain = Promise.resolve();
     if (this.currentStream) {
       try {
@@ -503,8 +397,6 @@ class HindiTTS implements ITTSService {
       }
       this.currentStream = null;
     }
-    // Force-resolve in-flight synthesis in case native never emits end/error
-    // after cancel — prevents a hung pump loop + concurrent generations.
     this.currentDone?.();
     this.currentDone = null;
     if (this.engine && this.pcmActive) {
@@ -527,9 +419,9 @@ class HindiTTS implements ITTSService {
       this.engine = null;
     }
     if (this.activeModelPath) {
-      console.log(
-        `[VoiceTTS] Engine released (was ${this.activeModelPath}), RAM freed`,
-      );
+      logger.info('TTS', 'Engine released and RAM freed', {
+        modelPath: this.activeModelPath,
+      });
     }
     this.activeModelPath = null;
     this.status = {

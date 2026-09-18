@@ -1,3 +1,4 @@
+/** GATT service used for the chat channel. */
 export const SERVICE_UUID = '71f271d0-8f4c-4c4d-8a2d-6f3a9497b41d';
 export const RX_CHARACTERISTIC_UUID = '4ad4a6d2-3f4a-477c-9832-5e0d8f7654d8';
 export const TX_CHARACTERISTIC_UUID = '8b3e8c1f-5d42-4f77-a91d-6c3e2b8a5f19';

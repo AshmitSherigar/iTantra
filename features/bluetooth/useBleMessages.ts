@@ -4,16 +4,11 @@ import {
   REASSEMBLY_TIMEOUT_MS,
   START_FRAME_RE,
   type ChatMessage,
-} from './constants';
-import { cleanDataPacket, hexToText } from './codec';
-import {
-  containsReplacementChar,
-  decodeBroadcast,
-  emitBroadcast,
-  looksLikeBroadcastJson,
-} from './broadcast';
-import { BleIncomingTextTracker } from '../tts/bleTtsText';
+} from '@/features/bluetooth/constants';
+import { cleanDataPacket, hexToText } from '@/features/bluetooth/codec';
+import { BleIncomingTextTracker } from '@/features/tts/bleTtsText';
 
+import { logger } from '@/utils/logger';
 export type StreamTts = {
   speakFullMessage: (text: string) => void;
   beginStream: () => void;
@@ -160,6 +155,21 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
     },
     [flushReassembly, getState],
   );
+      logger.warn('Bluetooth', 'Discarding undecodable chunked message');
+    }
+  }, [addMessage, clearReassembly, ttsRef]);
+
+  const armReassemblyTimeout = useCallback(() => {
+    const state = reassemblyRef.current;
+    if (state.timer) clearTimeout(state.timer);
+    state.timer = setTimeout(() => {
+      logger.warn(
+        'Bluetooth',
+        'BLE reassembly timed out; flushing best effort',
+      );
+      flushReassembly();
+    }, REASSEMBLY_TIMEOUT_MS);
+  }, [flushReassembly]);
 
   const resetIncomingState = useCallback(() => {
     clearReassembly();
@@ -182,7 +192,7 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
           const [, id, totalStr] = startMatch;
           const total = parseInt(totalStr, 10);
           if (!Number.isFinite(total) || total <= 0 || total > 5000) {
-            console.warn('Ignoring invalid START frame:', text);
+            logger.warn('Bluetooth', 'Ignoring invalid START frame');
             return;
           }
           clearReassembly(sender);
@@ -203,6 +213,10 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
           const [, id] = endMatch;
           if (statesRef.current.get(sender)?.id !== id) {
             console.warn('Ignoring END for unknown message:', id);
+          if (reassemblyRef.current.id !== id) {
+            logger.warn('Bluetooth', 'Ignoring END for unknown message', {
+              id,
+            });
             return;
           }
           flushReassembly(sender);
@@ -214,7 +228,10 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
       if (state?.id) {
         const clean = cleanDataPacket(hex);
         if (!clean) {
-          console.warn('Dropping corrupt data packet during reassembly');
+          logger.warn(
+            'Bluetooth',
+            'Dropping corrupt data packet during reassembly',
+          );
           return;
         }
         state.chunks.push(clean);
@@ -233,6 +250,16 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
           } catch (e) {
             console.warn('Streaming TTS push failed:', e);
           }
+        reassemblyRef.current.chunks.push(clean);
+        // Streaming TTS: decode everything received so far and speak only
+        // the newly-completed characters (handles Hindi split across packets).
+        try {
+          const fresh = trackerRef.current.pushJoinedHex(
+            reassemblyRef.current.chunks.join(''),
+          );
+          if (fresh) ttsRef.current.pushText(fresh);
+        } catch (e) {
+          logger.warn('Bluetooth', 'Streaming TTS push failed', e);
         }
         armReassemblyTimeout(sender);
         if (state.chunks.length >= state.total) {

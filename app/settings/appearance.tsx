@@ -1,62 +1,40 @@
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
-import React from 'react';
-
-import { useTheme } from '../../context/ThemeContext';
+import { Text, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useTheme } from '@/context/ThemeContext';
 
 export default function AppearanceScreen() {
-  const { theme, setTheme, isDark } = useTheme();
+  const { theme, setTheme, colors } = useTheme();
 
   const themes = ['Light', 'Dark', 'System Default'] as const;
 
   return (
-    <View
-      style={[
-        styles.container,
-        {
-          backgroundColor: isDark ? '#111' : '#fff',
-        },
-      ]}
+    <SafeAreaView
+      style={[styles.container, { backgroundColor: colors.background }]}
+      edges={['top', 'bottom']}
     >
       <View style={styles.content}>
-        <Text
-          style={[
-            styles.heading,
-            {
-              color: isDark ? '#fff' : '#111',
-            },
-          ]}
-        >
+        <Text style={[styles.heading, { color: colors.text }]}>
           Choose Appearance
         </Text>
 
         {themes.map((item) => (
           <TouchableOpacity
             key={item}
-            style={[
-              styles.option,
-              {
-                borderBottomColor: isDark ? '#333' : '#eee',
-              },
-            ]}
+            style={[styles.option, { borderBottomColor: colors.border }]}
             activeOpacity={0.7}
             onPress={() => setTheme(item)}
           >
-            <Text
-              style={[
-                styles.optionText,
-                {
-                  color: isDark ? '#fff' : '#111',
-                },
-              ]}
-            >
+            <Text style={[styles.optionText, { color: colors.text }]}>
               {item}
             </Text>
 
-            {theme === item && <Text style={styles.check}>✓</Text>}
+            {theme === item && (
+              <Text style={[styles.check, { color: colors.primary }]}>✓</Text>
+            )}
           </TouchableOpacity>
         ))}
       </View>
-    </View>
+    </SafeAreaView>
   );
 }
 

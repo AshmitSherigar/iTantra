@@ -1,8 +1,8 @@
 import { StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { FontSize, Radius, Spacing } from '../constants/theme';
+import { FontSize, Radius, Spacing } from '@/constants/theme';
 
-import { useTheme } from '../context/ThemeContext';
+import { useTheme } from '@/context/ThemeContext';
 
 type TranscriptBoxProps = {
   transcript: string;

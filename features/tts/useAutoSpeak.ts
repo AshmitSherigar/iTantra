@@ -1,49 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
-import { hindiTTS } from './HindiTTS';
+import { hindiTTS } from '@/features/tts/HindiTTS';
+import { logger } from '@/utils/logger';
 
 export type AutoSpeakApi = {
-  /** User toggle — when false, incoming messages are never spoken. */
   enabled: boolean;
   setEnabled: (v: boolean) => void;
-  /** TTS engine ready (model loaded). */
   isReady: boolean;
-  /** TTS model is currently loading. */
   isLoading: boolean;
-  /** Currently synthesizing / playing. */
   isSpeaking: boolean;
-  /** Last init / runtime error, if any. */
   error: string | null;
-  /** Speak a complete received message (queued, non-interrupting). */
   speakFullMessage: (text: string) => void;
-  /** Start a new packet-streamed utterance. */
   beginStream: () => void;
-  /** Push newly-decoded text from arrived packets (starts audio early). */
   pushStreamText: (newText: string) => void;
-  /** Flush the tail of the streamed utterance. */
   endStream: () => void;
   stop: () => void;
-  /**
-   * Load the TTS model for one language on demand (call when BLE devices
-   * connect). Idempotent per path — pass the selected language's
-   * `ttsAssetPath` so ONLY that voice (~114MB) ever lives in RAM.
-   */
   ensureReady: (modelPath?: string) => Promise<void>;
-  /** Destroy the TTS engine to free native RAM (call on BLE disconnect). */
   release: () => Promise<void>;
 };
 
-/**
- * Auto-speak controller for incoming BLE chat messages.
- *
- * RAM discipline: the Hindi VITS model (~114MB) is heavy. Pass
- * `{ autoInit: false }` on the chat screen so nothing loads until the two
- * devices connect — then call `ensureReady()` on connect and `release()`
- * on disconnect. Test screens can keep the default `autoInit: true`.
- *
- * - Polls engine status so `isSpeaking` stays fresh for the UI.
- * - All speak methods are safe no-ops on web / before init / when disabled.
- */
 export function useAutoSpeak(
   defaultEnabled = true,
   opts?: { autoInit?: boolean },
@@ -68,17 +43,17 @@ export function useAutoSpeak(
     }
     setIsLoading(true);
     setError(null);
-    console.log(
-      `[TTS] Loading voice model ${modelPath ?? '(default)'} (after BLE connect)…`,
-    );
+    logger.info('TTS', 'Loading voice model', {
+      modelPath: modelPath ?? '(default)',
+    });
     try {
       await hindiTTS.initialize({ debug: __DEV__, modelPath });
       setIsReady(true);
       setError(null);
-      console.log('[TTS] Voice model ready.');
+      logger.info('TTS', 'Voice model ready');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error('[TTS] Model load failed:', msg);
+      logger.error('TTS', 'Model load failed', msg);
       setError(msg);
     } finally {
       setIsLoading(false);
@@ -88,7 +63,7 @@ export function useAutoSpeak(
   const release = useCallback(async () => {
     try {
       await hindiTTS.destroy();
-      console.log('[TTS] Voice model released (RAM freed).');
+      logger.info('TTS', 'Voice model released and RAM freed');
     } catch {
       // ignore
     } finally {
@@ -97,8 +72,6 @@ export function useAutoSpeak(
     }
   }, []);
 
-  // One-time lazy init (skipped when autoInit is false — chat screen loads
-  // the model only after the two devices connect, to save RAM).
   useEffect(() => {
     if (!autoInit) return;
     let cancelled = false;
@@ -128,7 +101,6 @@ export function useAutoSpeak(
     };
   }, [autoInit]);
 
-  // Poll speaking state for UI.
   useEffect(() => {
     const id = setInterval(() => {
       const s = hindiTTS.getStatus();
@@ -145,7 +117,7 @@ export function useAutoSpeak(
     try {
       hindiTTS.enqueueSpeak(text);
     } catch (err) {
-      console.warn('[useAutoSpeak] enqueueSpeak failed:', err);
+      logger.warn('TTS', 'enqueueSpeak failed', err);
     }
   }, []);
 
@@ -155,7 +127,7 @@ export function useAutoSpeak(
     try {
       hindiTTS.startStreamingUtterance();
     } catch (err) {
-      console.warn('[useAutoSpeak] beginStream failed:', err);
+      logger.warn('TTS', 'beginStream failed', err);
     }
   }, []);
 
@@ -166,7 +138,7 @@ export function useAutoSpeak(
     try {
       hindiTTS.appendStreamingText(newText);
     } catch (err) {
-      console.warn('[useAutoSpeak] pushStreamText failed:', err);
+      logger.warn('TTS', 'pushStreamText failed', err);
     }
   }, []);
 
@@ -176,7 +148,7 @@ export function useAutoSpeak(
     try {
       hindiTTS.finishStreamingUtterance();
     } catch (err) {
-      console.warn('[useAutoSpeak] endStream failed:', err);
+      logger.warn('TTS', 'endStream failed', err);
     }
   }, []);
 

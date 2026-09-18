@@ -1,44 +1,42 @@
 import { View, Text, StyleSheet } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useTheme } from '@/context/ThemeContext';
 
 export default function AboutScreen() {
+  const { colors } = useTheme();
+
   return (
-    <View style={styles.container}>
-      <View style={styles.content}>
-        <Text style={styles.appName}>Low-Latency STT</Text>
+    <SafeAreaView
+      style={[styles.safeArea, { backgroundColor: colors.background }]}
+      edges={['top', 'bottom']}
+    >
+      <View style={styles.container}>
+        <View style={styles.content}>
+          <Text style={[styles.appName, { color: colors.text }]}>
+            VaaniSetu
+          </Text>
 
-        <Text style={styles.description}>
-          A low-latency speech-to-text mobile application built with React
-          Native and Expo.
-        </Text>
+          <Text style={[styles.description, { color: colors.textSecondary }]}>
+            A low-latency speech-to-text and text-to-speech mobile application
+            built with React Native for emergency contact.
+          </Text>
 
-        <Text style={styles.version}>Version 1.0.0</Text>
+          <Text style={[styles.version, { color: colors.textSecondary }]}>
+            Version 1.1.0
+          </Text>
+        </View>
       </View>
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+  },
+
   container: {
     flex: 1,
-    backgroundColor: '#fff',
-  },
-
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 55,
-    paddingBottom: 20,
-  },
-
-  back: {
-    fontSize: 40,
-    marginRight: 15,
-  },
-
-  title: {
-    fontSize: 24,
-    fontWeight: '700',
   },
 
   content: {
@@ -56,12 +54,10 @@ const styles = StyleSheet.create({
     fontSize: 16,
     textAlign: 'center',
     lineHeight: 24,
-    color: '#666',
   },
 
   version: {
     marginTop: 30,
     fontSize: 14,
-    color: '#999',
   },
 });

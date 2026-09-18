@@ -109,6 +109,7 @@ export default function Index() {
   const languageInstalled = isLanguageInstalled(selectedLanguage);
   const sttModelPath = selectedLanguage.sttAssetPath;
 
+  // Preload the selected language's STT model so the mic is low-latency.
   useEffect(() => {
     if (!languageInstalled || !sttModelPath) return;
     void ensureSttReady(sttModelPath);
@@ -206,7 +207,8 @@ export default function Index() {
       meshSpeechRef.current.stop();
     } catch {}
     setTranscript('');
-    await ensureSttReady(sttModelPath);
+    const ready = await ensureSttReady(sttModelPath);
+    if (!ready) return;
     await startVoice();
   }
 
@@ -604,6 +606,17 @@ export default function Index() {
         ) : null}
       </ScrollView>
 
+      {!languageInstalled ? (
+        <Pressable
+          onPress={promptInstallLanguage}
+          style={[styles.installBanner, { backgroundColor: colors.surface }]}
+        >
+          <Ionicons name="download-outline" size={16} color={colors.primary} />
+          <Text style={[styles.installText, { color: colors.primary }]}>
+            Install “{selectedLanguage.label}” models to enable the mic
+          </Text>
+        </Pressable>
+      ) : null}
       <View
         style={[
           styles.micDock,
@@ -711,6 +724,9 @@ const styles = StyleSheet.create({
 
   section: {
     marginTop: Spacing.lg,
+  transcriptSection: {
+    flex: 1,
+    minHeight: 220,
   },
 
   sectionHeader: {
@@ -752,6 +768,8 @@ const styles = StyleSheet.create({
 
   avatarText: {
     fontSize: 16,
+  liveText: {
+    fontSize: 9,
     fontWeight: '800',
   },
 
