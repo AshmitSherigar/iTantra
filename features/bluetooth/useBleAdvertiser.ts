@@ -1,12 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Device from 'expo-device';
 import { Alert, Linking, Platform } from 'react-native';
-import {
-  isBluetoothEnabled,
-  setServices,
-  startAdvertising,
-  stopAdvertising,
-} from 'react-native-bluetooth-ble';
+import { Ble } from '@/features/bluetooth/bleNative';
 import {
   MAX_ADVERTISED_NAME_LEN,
   RX_CHARACTERISTIC_UUID,
@@ -47,7 +42,7 @@ export function useBleAdvertiser() {
 
   const stopBluetooth = useCallback(() => {
     try {
-      stopAdvertising();
+      Ble.stopAdvertising();
     } catch (error) {
       logger.warn('Bluetooth', 'Stop advertising failed', error);
     }
@@ -89,7 +84,7 @@ export function useBleAdvertiser() {
         return;
       }
 
-      const enabled = await isBluetoothEnabled();
+      const enabled = await Ble.isBluetoothEnabled();
       if (!enabled) {
         const msg =
           'Bluetooth is turned off. Turn it on in system settings, then tap Start again.';
@@ -106,7 +101,7 @@ export function useBleAdvertiser() {
         return;
       }
 
-      await setServices([
+      await Ble.setServices([
         {
           uuid: SERVICE_UUID,
           characteristics: [
@@ -119,7 +114,7 @@ export function useBleAdvertiser() {
         },
       ]);
 
-      startAdvertising({
+      Ble.startAdvertising({
         serviceUUIDs: [SERVICE_UUID],
         localName: nameToAdvertise,
         advertisingData: { completeLocalName: nameToAdvertise } as never,
