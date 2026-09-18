@@ -1,8 +1,8 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { Platform } from 'react-native';
 import { Audio } from 'expo-av';
-import { createPcmLiveStream } from 'react-native-sherpa-onnx/audio';
 import type { PcmLiveStreamHandle } from 'react-native-sherpa-onnx/audio';
+import { getSherpaAudio } from '@/utils/sherpaNative';
 import { sttEngine } from '@/features/stt/STTEngine';
 import { logger } from '@/utils/logger';
 
@@ -155,7 +155,14 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
       pushLog('[Mic] step=create-stream');
 
       // 3. Open native mic capture at 16 kHz mono
-      const mic = createPcmLiveStream({ sampleRate: 16_000, channelCount: 1 });
+      const audioModule = getSherpaAudio();
+      if (!audioModule) {
+        throw new Error('Voice recording is not supported on this platform.');
+      }
+      const mic = audioModule.createPcmLiveStream({
+        sampleRate: 16_000,
+        channelCount: 1,
+      });
       micRef.current = mic;
 
       // 4. Accumulate PCM chunks in memory

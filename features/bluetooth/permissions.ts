@@ -1,5 +1,5 @@
 import { Alert, Linking, PermissionsAndroid, Platform } from 'react-native';
-import { requestBluetoothPermission } from 'react-native-bluetooth-ble';
+import { Ble } from '@/features/bluetooth/bleNative';
 import { logger } from '@/utils/logger';
 
 export type BlePermissionResult = {
@@ -58,7 +58,7 @@ export function getRequiredAndroidPermissions(): string[] {
 export async function ensureBlePermissions(): Promise<BlePermissionResult> {
   if (Platform.OS !== 'android') {
     try {
-      const granted = await requestBluetoothPermission();
+      const granted = await Ble.requestBluetoothPermission();
       return { granted, missing: [], needsSettings: !granted };
     } catch {
       return { granted: false, missing: [], needsSettings: false };
@@ -82,7 +82,9 @@ export async function ensureBlePermissions(): Promise<BlePermissionResult> {
     const missingBefore = required.filter((_, index) => !checkResults[index]);
 
     if (missingBefore.length === 0) {
-      const libGranted = await requestBluetoothPermission().catch(() => true);
+      const libGranted = await Ble.requestBluetoothPermission().catch(
+        () => true,
+      );
       return { granted: libGranted, missing: [], needsSettings: !libGranted };
     }
 
@@ -105,7 +107,7 @@ export async function ensureBlePermissions(): Promise<BlePermissionResult> {
       return { granted: false, missing, needsSettings };
     }
 
-    const libGranted = await requestBluetoothPermission().catch(() => true);
+    const libGranted = await Ble.requestBluetoothPermission().catch(() => true);
 
     if (!libGranted) {
       return { granted: false, missing: [], needsSettings: false };

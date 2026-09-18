@@ -1,8 +1,9 @@
 import { Platform } from 'react-native';
-import { createSTT } from 'react-native-sherpa-onnx/stt';
+import type { createSTT as CreateSTTType } from 'react-native-sherpa-onnx/stt';
+import { getSherpaStt } from '@/utils/sherpaNative';
 import { logger } from '@/utils/logger';
 
-type STTInstance = Awaited<ReturnType<typeof createSTT>>;
+type STTInstance = Awaited<ReturnType<typeof CreateSTTType>>;
 
 export type STTStatus = {
   isInitialized: boolean;
@@ -68,7 +69,11 @@ export class STTEngine {
 
     this.initPromise = (async () => {
       try {
-        this.stt = await createSTT({
+        const sttModule = getSherpaStt();
+        if (!sttModule) {
+          throw new Error('STT is not supported on this platform.');
+        }
+        this.stt = await sttModule.createSTT({
           modelPath: {
             type: 'asset',
             path: modelPath,

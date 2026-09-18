@@ -1,19 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
-import {
-  addEventListener,
-  connect,
-  createBond,
-  disconnect,
-  discoverServices,
-  getBondState,
-  requestMTU,
-  stopAdvertising,
-  stopScan,
-  subscribeToCharacteristic,
-  updateCharacteristicValue,
-  writeCharacteristic,
-} from 'react-native-bluetooth-ble';
+import { Ble } from '@/features/bluetooth/bleNative';
 import {
   RX_CHARACTERISTIC_UUID,
   SERVICE_UUID,
@@ -113,16 +100,16 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
       removePeripheralSubscribedListenerRef.current?.();
       removePeripheralUnsubscribedListenerRef.current?.();
       try {
-        stopScan();
+        Ble.stopScan();
       } catch {}
       try {
-        stopAdvertising();
+        Ble.stopAdvertising();
       } catch {}
     };
   }, []);
 
   useEffect(() => {
-    removeDeviceDisconnectedListenerRef.current = addEventListener(
+    removeDeviceDisconnectedListenerRef.current = Ble.addEventListener(
       'deviceDisconnected',
       (event) => {
         if (connectedDeviceIdRef.current !== event.deviceId) return;
@@ -144,7 +131,7 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
   // this the link counters keep showing "connected" phones that left long
   // ago — the reported phantom mesh links.
   useEffect(() => {
-    return addEventListener('deviceDisconnected', (event) => {
+    return Ble.addEventListener('deviceDisconnected', (event) => {
       console.log('BLE link lost:', event.deviceId);
       pruneCentralLinks([event.deviceId]);
     });
@@ -165,7 +152,7 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
 
     logger.debug('Bluetooth', 'Setting up peripheral listeners');
 
-    removePeripheralWriteListenerRef.current = addEventListener(
+    removePeripheralWriteListenerRef.current = Ble.addEventListener(
       'peripheralWriteRequest',
       (event) => {
         logger.debug('Bluetooth', 'Peripheral write received');
@@ -189,7 +176,7 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
       },
     );
 
-    removePeripheralSubscribedListenerRef.current = addEventListener(
+    removePeripheralSubscribedListenerRef.current = Ble.addEventListener(
       'peripheralSubscribed',
       (event) => {
         logger.info('Bluetooth', 'Peripheral subscribed');
@@ -208,13 +195,13 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
         setPeripheralCentralId((current) => current ?? event.centralId);
         if (Platform.OS === 'android') {
           void (async () => {
-            const bondState = await getBondState(event.centralId);
+            const bondState = await Ble.getBondState(event.centralId);
             const finalBondState =
               bondState === 'bonded'
                 ? bondState
-                : await createBond(event.centralId);
+                : await Ble.createBond(event.centralId);
             if (finalBondState !== 'bonded') {
-              await disconnect(event.centralId);
+              await Ble.disconnect(event.centralId);
               return;
             }
             authorizedPeripheralCentralIdRef.current = event.centralId;
@@ -224,7 +211,7 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
             logger.info('Bluetooth', 'Bonded peripheral chat is ready');
           })().catch((error) => {
             logger.warn('Bluetooth', 'Peripheral bonding failed', error);
-            void disconnect(event.centralId);
+            void Ble.disconnect(event.centralId);
           });
           return;
         }
@@ -236,7 +223,7 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
       },
     );
 
-    removePeripheralUnsubscribedListenerRef.current = addEventListener(
+    removePeripheralUnsubscribedListenerRef.current = Ble.addEventListener(
       'peripheralUnsubscribed',
       (event) => {
         logger.info('Bluetooth', 'Peripheral unsubscribed');
@@ -289,26 +276,26 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
         // decoupled from the scanner).
         await preConnect?.();
 
-        await connect(deviceId);
+        await Ble.connect(deviceId);
         logger.info('Bluetooth', 'Connected', { deviceId });
         if (Platform.OS === 'android') {
-          const bondState = await getBondState(deviceId);
+          const bondState = await Ble.getBondState(deviceId);
           const finalBondState =
-            bondState === 'bonded' ? bondState : await createBond(deviceId);
+            bondState === 'bonded' ? bondState : await Ble.createBond(deviceId);
           if (finalBondState !== 'bonded') {
             throw new Error('Bluetooth device pairing was not completed.');
           }
         }
         setConnectedDeviceId(deviceId);
 
-        const services = await discoverServices(deviceId);
+        const services = await Ble.discoverServices(deviceId);
         const chatService = services.find(
           (s) => s.uuid.toLowerCase() === SERVICE_UUID.toLowerCase(),
         );
 
         if (!chatService) {
           logger.warn('Bluetooth', 'Chat service not found');
-          await disconnect(deviceId);
+          await Ble.disconnect(deviceId);
           setConnectedDeviceIds((current) =>
             current.filter((id) => id !== deviceId),
           );
@@ -327,7 +314,7 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
 
         if (!rxCharacteristic || !txCharacteristic) {
           logger.warn('Bluetooth', 'RX or TX characteristic not found');
-          await disconnect(deviceId);
+          await Ble.disconnect(deviceId);
           setConnectedDeviceIds((current) =>
             current.filter((id) => id !== deviceId),
           );
@@ -337,7 +324,7 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
           return;
         }
 
-        const removeValueListener = addEventListener(
+        const removeValueListener = Ble.addEventListener(
           'characteristicValueChanged',
           (event) => {
             if (event.deviceId !== deviceId) return;
@@ -356,14 +343,14 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
           removeValueListener,
         );
 
-        await subscribeToCharacteristic(
+        await Ble.subscribeToCharacteristic(
           deviceId,
           SERVICE_UUID,
           TX_CHARACTERISTIC_UUID,
         );
 
         try {
-          await requestMTU(deviceId, 512);
+          await Ble.requestMTU(deviceId, 512);
         } catch (e) {
           logger.warn(
             'Bluetooth',
@@ -400,7 +387,7 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
   const writeCentralPacket = useCallback(
     (deviceId: string, packetHex: string) => {
       if (!deviceId) return Promise.resolve();
-      return writeCharacteristic(
+      return Ble.writeCharacteristic(
         deviceId,
         SERVICE_UUID,
         RX_CHARACTERISTIC_UUID,
@@ -412,7 +399,7 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
   );
 
   const notifyPeripheralPacket = useCallback((packetHex: string) => {
-    return updateCharacteristicValue(
+    return Ble.updateCharacteristicValue(
       SERVICE_UUID,
       TX_CHARACTERISTIC_UUID,
       packetHex,
@@ -550,7 +537,7 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
       await Promise.all(
         connectedDeviceIds.map(async (deviceId) => {
           try {
-            await disconnect(deviceId);
+            await Ble.disconnect(deviceId);
           } catch (error) {
             console.log('Disconnect error:', error);
           }

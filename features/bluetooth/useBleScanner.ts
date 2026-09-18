@@ -1,9 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  addDeviceFoundListener,
-  startScan,
-  stopScan,
-} from 'react-native-bluetooth-ble';
+import { Ble } from '@/features/bluetooth/bleNative';
 import { SERVICE_UUID } from '@/features/bluetooth/constants';
 import { ensureBleScanPermissions } from '@/features/bluetooth/permissions';
 import {
@@ -29,7 +25,7 @@ export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
   const stopScanning = useCallback(async () => {
     scanAttemptRef.current += 1;
     try {
-      await stopScan();
+      await Ble.stopScan();
     } catch (error) {
       logger.warn('Bluetooth', 'Stop scan failed', error);
     }
@@ -47,7 +43,7 @@ export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
     return () => {
       removeDeviceListenerRef.current?.();
       try {
-        stopScan();
+        Ble.stopScan();
       } catch {}
     };
   }, []);
@@ -79,7 +75,7 @@ export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
         removeDeviceListenerRef.current();
         removeDeviceListenerRef.current = undefined;
       }
-      removeDeviceListenerRef.current = addDeviceFoundListener((device) => {
+      removeDeviceListenerRef.current = Ble.addDeviceFoundListener((device) => {
         const found = device as unknown as ScannedDevice;
         if (!isVaaniSetuDevice(found, SERVICE_UUID)) return;
 
@@ -115,7 +111,7 @@ export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
       logger.info('Bluetooth', 'Starting scan');
       // Filter by our chat service so random nameless BLE peripherals
       try {
-        await startScan({
+        await Ble.startScan({
           serviceUUIDs: [SERVICE_UUID],
           allowDuplicates: true,
           scanMode: 'lowLatency',
@@ -128,10 +124,10 @@ export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
           'Filtered scan failed; retrying unfiltered',
           e,
         );
-        await startScan({ allowDuplicates: true, scanMode: 'lowLatency' });
+        await Ble.startScan({ allowDuplicates: true, scanMode: 'lowLatency' });
       }
       if (attempt !== scanAttemptRef.current) {
-        await stopScan();
+        await Ble.stopScan();
         return;
       }
       setIsScanning(true);

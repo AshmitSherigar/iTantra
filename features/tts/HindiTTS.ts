@@ -1,11 +1,8 @@
-import {
-  createStreamingTTS,
-  detectTtsModel,
-} from 'react-native-sherpa-onnx/tts';
 import type {
   StreamingTtsEngine,
   TtsStreamController,
 } from 'react-native-sherpa-onnx/tts';
+import { getSherpaTts } from '@/utils/sherpaNative';
 import { ITTSService, HindiTTSConfig, TTSStatus } from '@/features/tts/types';
 import { logger } from '@/utils/logger';
 
@@ -125,16 +122,20 @@ class HindiTTS implements ITTSService {
     }
 
     try {
+      const ttsModule = getSherpaTts();
+      if (!ttsModule) {
+        throw new Error('TTS is not supported on this platform.');
+      }
       const modelPathConfig = { type: 'asset', path: modelPath } as const;
 
       if (config?.debug) {
         logger.debug('TTS', 'Detecting model');
-        const detection = await detectTtsModel(modelPathConfig);
+        const detection = await ttsModule.detectTtsModel(modelPathConfig);
         logger.debug('TTS', 'Model detection completed', detection);
       }
 
       logger.info('TTS', 'Creating voice engine', { modelPath });
-      this.engine = await createStreamingTTS({
+      this.engine = await ttsModule.createStreamingTTS({
         modelPath: modelPathConfig,
         modelType: 'vits',
         provider: 'cpu',
