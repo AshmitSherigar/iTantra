@@ -8,3 +8,6 @@ export * from '@/features/bluetooth/useBleAdvertiser';
 export * from '@/features/bluetooth/useBleScanner';
 export * from '@/features/bluetooth/useBleConnection';
 export * from '@/features/bluetooth/useBleModels';
+export * from '@/features/bluetooth/broadcast';
+export { default as AndroidNearbyBroadcastRuntime } from '@/features/bluetooth/AndroidNearbyBroadcastRuntime';
+export * from '@/features/bluetooth/useMeshSpeech';

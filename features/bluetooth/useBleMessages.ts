@@ -6,6 +6,12 @@ import {
   type ChatMessage,
 } from '@/features/bluetooth/constants';
 import { cleanDataPacket, hexToText } from '@/features/bluetooth/codec';
+import {
+  containsReplacementChar,
+  decodeBroadcast,
+  emitBroadcast,
+  looksLikeBroadcastJson,
+} from '@/features/bluetooth/broadcast';
 import { BleIncomingTextTracker } from '@/features/tts/bleTtsText';
 
 import { logger } from '@/utils/logger';
@@ -155,21 +161,6 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
     },
     [flushReassembly, getState],
   );
-      logger.warn('Bluetooth', 'Discarding undecodable chunked message');
-    }
-  }, [addMessage, clearReassembly, ttsRef]);
-
-  const armReassemblyTimeout = useCallback(() => {
-    const state = reassemblyRef.current;
-    if (state.timer) clearTimeout(state.timer);
-    state.timer = setTimeout(() => {
-      logger.warn(
-        'Bluetooth',
-        'BLE reassembly timed out; flushing best effort',
-      );
-      flushReassembly();
-    }, REASSEMBLY_TIMEOUT_MS);
-  }, [flushReassembly]);
 
   const resetIncomingState = useCallback(() => {
     clearReassembly();
@@ -213,10 +204,6 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
           const [, id] = endMatch;
           if (statesRef.current.get(sender)?.id !== id) {
             console.warn('Ignoring END for unknown message:', id);
-          if (reassemblyRef.current.id !== id) {
-            logger.warn('Bluetooth', 'Ignoring END for unknown message', {
-              id,
-            });
             return;
           }
           flushReassembly(sender);
@@ -242,7 +229,7 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
             const fresh = tracker.pushJoinedHex(joined);
             // Peek at the full buffered decode: broadcast JSON must never
             // reach speech, even as partial fragments.
-            if (looksLikeBroadcastJson(tracker.getSpokenText())) {
+            if (looksLikeBroadcastJson(hexToText(joined) ?? '')) {
               state.suppressStream = true;
             } else if (fresh) {
               ttsRef.current.pushText(fresh);
@@ -250,16 +237,6 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
           } catch (e) {
             console.warn('Streaming TTS push failed:', e);
           }
-        reassemblyRef.current.chunks.push(clean);
-        // Streaming TTS: decode everything received so far and speak only
-        // the newly-completed characters (handles Hindi split across packets).
-        try {
-          const fresh = trackerRef.current.pushJoinedHex(
-            reassemblyRef.current.chunks.join(''),
-          );
-          if (fresh) ttsRef.current.pushText(fresh);
-        } catch (e) {
-          logger.warn('Bluetooth', 'Streaming TTS push failed', e);
         }
         armReassemblyTimeout(sender);
         if (state.chunks.length >= state.total) {

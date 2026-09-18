@@ -605,18 +605,6 @@ export default function Index() {
           </Pressable>
         ) : null}
       </ScrollView>
-
-      {!languageInstalled ? (
-        <Pressable
-          onPress={promptInstallLanguage}
-          style={[styles.installBanner, { backgroundColor: colors.surface }]}
-        >
-          <Ionicons name="download-outline" size={16} color={colors.primary} />
-          <Text style={[styles.installText, { color: colors.primary }]}>
-            Install “{selectedLanguage.label}” models to enable the mic
-          </Text>
-        </Pressable>
-      ) : null}
       <View
         style={[
           styles.micDock,
@@ -724,6 +712,8 @@ const styles = StyleSheet.create({
 
   section: {
     marginTop: Spacing.lg,
+  },
+
   transcriptSection: {
     flex: 1,
     minHeight: 220,
@@ -768,8 +758,6 @@ const styles = StyleSheet.create({
 
   avatarText: {
     fontSize: 16,
-  liveText: {
-    fontSize: 9,
     fontWeight: '800',
   },
 

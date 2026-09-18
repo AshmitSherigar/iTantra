@@ -20,6 +20,10 @@ import {
   TX_CHARACTERISTIC_UUID,
 } from '@/features/bluetooth/constants';
 import { textToHex } from '@/features/bluetooth/codec';
+import {
+  encodeBroadcast,
+  type BroadcastEnvelope,
+} from '@/features/bluetooth/broadcast';
 import { sendHexFramed } from '@/features/bluetooth/transport';
 import { logger } from '@/utils/logger';
 
@@ -105,25 +109,6 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
     return () => {
       centralListeners.forEach((remove) => remove());
       centralListeners.clear();
-    removeDeviceDisconnectedListenerRef.current = addEventListener(
-      'deviceDisconnected',
-      (event) => {
-        if (connectedDeviceIdRef.current !== event.deviceId) return;
-        logger.info('Bluetooth', 'Central device disconnected', {
-          deviceId: event.deviceId,
-        });
-        removeCentralValueListenerRef.current?.();
-        removeCentralValueListenerRef.current = undefined;
-        setConnectedDeviceId(null);
-        clearMessages();
-        resetIncomingState();
-      },
-    );
-
-    return () => {
-      removeDeviceDisconnectedListenerRef.current?.();
-      removeDeviceDisconnectedListenerRef.current = undefined;
-      removeCentralValueListenerRef.current?.();
       removePeripheralWriteListenerRef.current?.();
       removePeripheralSubscribedListenerRef.current?.();
       removePeripheralUnsubscribedListenerRef.current?.();
@@ -133,12 +118,25 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
       try {
         stopAdvertising();
       } catch {}
-      const deviceId = connectedDeviceIdRef.current;
-      if (deviceId) {
-        try {
-          disconnect(deviceId);
-        } catch {}
-      }
+    };
+  }, []);
+
+  useEffect(() => {
+    removeDeviceDisconnectedListenerRef.current = addEventListener(
+      'deviceDisconnected',
+      (event) => {
+        if (connectedDeviceIdRef.current !== event.deviceId) return;
+        logger.info('Bluetooth', 'Central device disconnected', {
+          deviceId: event.deviceId,
+        });
+        setConnectedDeviceId(null);
+        clearMessages();
+        resetIncomingState();
+      },
+    );
+    return () => {
+      removeDeviceDisconnectedListenerRef.current?.();
+      removeDeviceDisconnectedListenerRef.current = undefined;
     };
   }, [clearMessages, resetIncomingState]);
 
@@ -154,8 +152,6 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
 
   const clearConnection = useCallback(() => {
     setConnectedDeviceIds([]);
-    removeCentralValueListenerRef.current?.();
-    removeCentralValueListenerRef.current = undefined;
     authorizedPeripheralCentralIdRef.current = null;
     setConnectedDeviceId(null);
     setPeripheralCentralIds([]);
@@ -393,7 +389,7 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
         setIsConnecting(false);
       }
     },
-    [connectedDeviceIds, isLanguageInstalled, promptInstallLanguage],
+    [clearConnection, connectedDeviceIds, isLanguageInstalled, promptInstallLanguage],
   );
 
   const writeCentralPacket = useCallback(
@@ -427,23 +423,6 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
         console.log('No connection — cannot send');
         return false;
       }
-      try {
-        await sendHexFramed(
-          textToHex(trimmed),
-          (packetHex) =>
-            writeCentralPacket(connectedDeviceId as string, packetHex),
-          notifyPeripheralPacket,
-          {
-            isCentral: !!connectedDeviceId,
-          },
-        );
-        addMessage(trimmed, 'me');
-        return true;
-      } catch (error) {
-        logger.warn('Bluetooth', 'Cannot send without a connection');
-        return false;
-      }
-
       const sendOperation = sendQueueRef.current.then(async () => {
         if (!connectedDeviceId && !peripheralCentralId) {
           logger.warn('Bluetooth', 'Queued send skipped; connection ended');
@@ -452,7 +431,10 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
         try {
           await sendHexFramed(
             textToHex(trimmed),
-            writeCentralPacket,
+            (packetHex) =>
+              connectedDeviceId
+                ? writeCentralPacket(connectedDeviceId, packetHex)
+                : Promise.resolve(),
             notifyPeripheralPacket,
             {
               isCentral: !!connectedDeviceId,
@@ -499,13 +481,6 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
       if (attempted === 0) {
         console.log('No connection — cannot broadcast');
         return { delivered: 0, attempted: 0 };
-  const disconnectFromDevice = useCallback(async () => {
-    if (connectedDeviceId) {
-      try {
-        await disconnect(connectedDeviceId);
-        logger.info('Bluetooth', 'Central disconnected');
-      } catch (error) {
-        logger.error('Bluetooth', 'Disconnect failed', error);
       }
       const payload = textToHex(encodeBroadcast(envelope));
       const centralOutcomes = await Promise.allSettled(

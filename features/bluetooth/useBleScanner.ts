@@ -61,13 +61,6 @@ export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
     scanStartingRef.current = true;
     const attempt = ++scanAttemptRef.current;
 
-    const allowed = await ensureBleScanPermissions();
-    if (!allowed) {
-      setScanError(
-        'Location permission is required for Bluetooth scanning. Grant it, turn Location services ON, then scan again.',
-      );
-      return;
-    }
     try {
       setScanError(null);
 
@@ -82,67 +75,28 @@ export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
 
       setDevices([]);
 
-    removeDeviceListenerRef.current = addDeviceFoundListener((device) => {
-      const found = device as unknown as ScannedDevice;
-      // Show ONLY devices running this app. The native scan already filters
-      // by SERVICE_UUID, but some platforms still deliver extras — drop any
-      // result that doesn't advertise our service so random
-      // headphones/speakers/watches never appear in the list.
-      if (!isVaaniSetuDevice(found, SERVICE_UUID)) {
-        return;
-      }
-      console.log(
-        'VaaniSetu device found:',
-        getDeviceDisplayName(found),
-        found.id,
-      );
-      setDevices((currentDevices) => {
-        const byId = currentDevices.findIndex((d) => d.id === found.id);
-        if (byId !== -1) {
-          const updated = [...currentDevices];
-          updated[byId] = mergeScannedDevice(currentDevices[byId], found);
-          return updated;
-        }
-        const incomingName = getDeviceDisplayName(found);
-        if (!incomingName.startsWith('VaaniSetu •')) {
-          const byName = currentDevices.findIndex(
-            (d) => getDeviceDisplayName(d) === incomingName,
-          );
-          if (byName !== -1) {
-            console.log(
-              `Address rotated for "${incomingName}": ${currentDevices[byName].id} -> ${found.id}`,
-            );
       if (removeDeviceListenerRef.current) {
         removeDeviceListenerRef.current();
         removeDeviceListenerRef.current = undefined;
       }
-
       removeDeviceListenerRef.current = addDeviceFoundListener((device) => {
-        logger.debug('Bluetooth', 'Device found', {
-          id: device.id,
-          name: getDeviceDisplayName(device as unknown as ScannedDevice),
-        });
         const found = device as unknown as ScannedDevice;
+        if (!isVaaniSetuDevice(found, SERVICE_UUID)) return;
+
         setDevices((currentDevices) => {
           const byId = currentDevices.findIndex((d) => d.id === found.id);
           if (byId !== -1) {
-            // allowDuplicates delivers the same id again, often with the local
             const updated = [...currentDevices];
             updated[byId] = mergeScannedDevice(currentDevices[byId], found);
             return updated;
           }
-        }
-        if (currentDevices.length >= 50) return currentDevices;
-        return [...currentDevices, found];
+
           const incomingName = getDeviceDisplayName(found);
-          if (incomingName !== 'Bluetooth Device') {
+          if (!incomingName.startsWith('VaaniSetu •')) {
             const byName = currentDevices.findIndex(
               (d) => getDeviceDisplayName(d) === incomingName,
             );
             if (byName !== -1) {
-              logger.info('Bluetooth', 'Device address rotated', {
-                name: incomingName,
-              });
               const updated = [...currentDevices];
               updated[byName] = mergeScannedDevice(
                 { ...currentDevices[byName], id: found.id },
@@ -152,12 +106,12 @@ export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
               return updated;
             }
           }
-          // Cap growth in crowded areas.
+
           if (currentDevices.length >= 50) return currentDevices;
           return [...currentDevices, found];
         });
       });
-      
+
       logger.info('Bluetooth', 'Starting scan');
       // Filter by our chat service so random nameless BLE peripherals
       try {
