@@ -106,5 +106,8 @@ export function isLanguageInstalled(lang: LanguageModel): boolean {
 }
 
 export function ttsPathFor(id: LanguageId): string {
-  return getLanguage(id).ttsAssetPath ?? getLanguage(DEFAULT_LANGUAGE_ID).ttsAssetPath!;
+  return (
+    getLanguage(id).ttsAssetPath ??
+    getLanguage(DEFAULT_LANGUAGE_ID).ttsAssetPath!
+  );
 }

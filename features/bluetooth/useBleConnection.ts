@@ -389,7 +389,12 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
         setIsConnecting(false);
       }
     },
-    [clearConnection, connectedDeviceIds, isLanguageInstalled, promptInstallLanguage],
+    [
+      clearConnection,
+      connectedDeviceIds,
+      isLanguageInstalled,
+      promptInstallLanguage,
+    ],
   );
 
   const writeCentralPacket = useCallback(
