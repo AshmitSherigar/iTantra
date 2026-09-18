@@ -1,12 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Platform } from 'react-native';
 import {
   addEventListener,
   connect,
-  createBond,
   disconnect,
   discoverServices,
-  getBondState,
   requestMTU,
   stopAdvertising,
   stopScan,
@@ -206,28 +203,6 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
             : [...current, event.centralId],
         );
         setPeripheralCentralId((current) => current ?? event.centralId);
-        if (Platform.OS === 'android') {
-          void (async () => {
-            const bondState = await getBondState(event.centralId);
-            const finalBondState =
-              bondState === 'bonded'
-                ? bondState
-                : await createBond(event.centralId);
-            if (finalBondState !== 'bonded') {
-              await disconnect(event.centralId);
-              return;
-            }
-            authorizedPeripheralCentralIdRef.current = event.centralId;
-            setPeripheralCentralId(event.centralId);
-            setMessages([]);
-            resetIncomingState();
-            logger.info('Bluetooth', 'Bonded peripheral chat is ready');
-          })().catch((error) => {
-            logger.warn('Bluetooth', 'Peripheral bonding failed', error);
-            void disconnect(event.centralId);
-          });
-          return;
-        }
         authorizedPeripheralCentralIdRef.current = event.centralId;
         setPeripheralCentralId(event.centralId);
         setMessages([]);
@@ -291,14 +266,6 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
 
         await connect(deviceId);
         logger.info('Bluetooth', 'Connected', { deviceId });
-        if (Platform.OS === 'android') {
-          const bondState = await getBondState(deviceId);
-          const finalBondState =
-            bondState === 'bonded' ? bondState : await createBond(deviceId);
-          if (finalBondState !== 'bonded') {
-            throw new Error('Bluetooth device pairing was not completed.');
-          }
-        }
         setConnectedDeviceId(deviceId);
 
         const services = await discoverServices(deviceId);
