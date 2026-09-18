@@ -8,6 +8,7 @@ import { SERVICE_UUID } from '@/features/bluetooth/constants';
 import { ensureBleScanPermissions } from '@/features/bluetooth/permissions';
 import {
   getDeviceDisplayName,
+  isVaaniSetuDevice,
   mergeScannedDevice,
   type ScannedDevice,
 } from '@/features/bluetooth/devices';
@@ -42,7 +43,6 @@ export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
     logger.info('Bluetooth', 'Scan stopped');
   }, []);
 
-  // Stop scanning when the screen unmounts.
   useEffect(() => {
     return () => {
       removeDeviceListenerRef.current?.();
@@ -79,30 +79,24 @@ export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
         removeDeviceListenerRef.current();
         removeDeviceListenerRef.current = undefined;
       }
-
       removeDeviceListenerRef.current = addDeviceFoundListener((device) => {
-        logger.debug('Bluetooth', 'Device found', {
-          id: device.id,
-          name: getDeviceDisplayName(device as unknown as ScannedDevice),
-        });
         const found = device as unknown as ScannedDevice;
+        if (!isVaaniSetuDevice(found, SERVICE_UUID)) return;
+
         setDevices((currentDevices) => {
           const byId = currentDevices.findIndex((d) => d.id === found.id);
           if (byId !== -1) {
-            // allowDuplicates delivers the same id again, often with the local
             const updated = [...currentDevices];
             updated[byId] = mergeScannedDevice(currentDevices[byId], found);
             return updated;
           }
+
           const incomingName = getDeviceDisplayName(found);
-          if (incomingName !== 'Bluetooth Device') {
+          if (!incomingName.startsWith('VaaniSetu •')) {
             const byName = currentDevices.findIndex(
               (d) => getDeviceDisplayName(d) === incomingName,
             );
             if (byName !== -1) {
-              logger.info('Bluetooth', 'Device address rotated', {
-                name: incomingName,
-              });
               const updated = [...currentDevices];
               updated[byName] = mergeScannedDevice(
                 { ...currentDevices[byName], id: found.id },
@@ -112,7 +106,7 @@ export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
               return updated;
             }
           }
-          // Cap growth in crowded areas.
+
           if (currentDevices.length >= 50) return currentDevices;
           return [...currentDevices, found];
         });

@@ -34,7 +34,62 @@ export function getDeviceDisplayName(
       }
     }
   }
-  return 'Bluetooth Device';
+  // No name in the scan record yet (common on the first packet — the name
+  // arrives via the scan response a moment later and `mergeScannedDevice`
+  // fills it in). Fall back to a short id so the row is still identifiable
+  // as a VaaniSetu device instead of a generic "Bluetooth Device".
+  const id = typeof device?.id === 'string' ? device.id.trim() : '';
+  if (id.length > 0) {
+    const shortId = id.length > 8 ? id.slice(-8) : id;
+    return `VaaniSetu • ${shortId}`;
+  }
+  return 'VaaniSetu device';
+}
+
+/**
+ * True when a scan result advertises our chat service — i.e. it is running
+ * this app (VaaniSetu), not a random headphone/speaker/watch.
+ *
+ * Checks every place the native module can surface service UUIDs:
+ * - `serviceUUIDs` (top-level, from ScanRecord.getServiceUuids)
+ * - `advertisingData.completeServiceUUIDs128/32/16` (+ incomplete variants)
+ */
+export function isVaaniSetuDevice(
+  device: ScannedDevice | null | undefined,
+  serviceUuid: string,
+): boolean {
+  if (!device) return false;
+  const wanted = serviceUuid.trim().toLowerCase();
+  if (!wanted) return false;
+
+  const topLevel = Array.isArray(device.serviceUUIDs)
+    ? device.serviceUUIDs
+    : [];
+  for (const uuid of topLevel) {
+    if (typeof uuid === 'string' && uuid.trim().toLowerCase() === wanted) {
+      return true;
+    }
+  }
+
+  const adv = device.advertisingData ?? {};
+  const buckets = [
+    adv.completeServiceUUIDs128,
+    adv.incompleteServiceUUIDs128,
+    adv.completeServiceUUIDs32,
+    adv.incompleteServiceUUIDs32,
+    adv.completeServiceUUIDs16,
+    adv.incompleteServiceUUIDs16,
+  ];
+  for (const bucket of buckets) {
+    if (Array.isArray(bucket)) {
+      for (const uuid of bucket as unknown[]) {
+        if (typeof uuid === 'string' && uuid.trim().toLowerCase() === wanted) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 function pickName(prevVal: unknown, nextVal: unknown): string | undefined {

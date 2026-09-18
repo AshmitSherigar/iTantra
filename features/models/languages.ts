@@ -104,3 +104,10 @@ export function getLanguage(id: LanguageId): LanguageModel {
 export function isLanguageInstalled(lang: LanguageModel): boolean {
   return lang.bundled && lang.sttAssetPath != null && lang.ttsAssetPath != null;
 }
+
+export function ttsPathFor(id: LanguageId): string {
+  return (
+    getLanguage(id).ttsAssetPath ??
+    getLanguage(DEFAULT_LANGUAGE_ID).ttsAssetPath!
+  );
+}
