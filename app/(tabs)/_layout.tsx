@@ -63,6 +63,16 @@ export default function TabsLayout() {
       />
 
       <Tabs.Screen
+        name="wifi"
+        options={{
+          title: 'WiFi',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="wifi-outline" size={size} color={color} />
+          ),
+        }}
+      />
+
+      <Tabs.Screen
         name="settings"
         options={{
           title: 'Settings',
