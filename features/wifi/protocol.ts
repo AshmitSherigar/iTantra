@@ -1,12 +1,11 @@
 import { Buffer } from 'buffer';
 
 /**
- * WiFi wire protocol — 4-byte big-endian length prefix + JSON payload.
+ * WiFi wire protocol: each message is framed as a 4-byte big-endian
+ * length prefix followed by a JSON payload.
  *
- * Ported from `transport/protocol.ts` (wifi branch prototype) with two
- * additive fields so the chat UI can label bubbles without changing the
- * framing: `id` and `senderName`. Old peers that omit them still decode
- * fine; new peers accept old payloads.
+ * `id`, `senderName` and `scope` are optional so payloads that omit them
+ * still decode. The framing never changes regardless of fields present.
  */
 
 export type WifiMessageType =
@@ -25,8 +24,8 @@ export interface WifiTransportMessage {
   senderName?: string;
   /**
    * Routing scope. `broadcast` = sent to everyone (shows on the global
-   * WiFi page); `direct` (or omitted for legacy peers) = private 1-to-1
-   * (shows only in that peer's chat window).
+   * WiFi page); `direct` (or omitted) = private 1-to-1 (shows only in
+   * that peer's chat window).
    */
   scope?: 'broadcast' | 'direct';
 }
@@ -34,6 +33,7 @@ export interface WifiTransportMessage {
 const HEADER_BYTES = 4;
 const MAX_FRAME_BYTES = 4 * 1024 * 1024;
 
+/** Serializes a message into a length-prefixed frame for the socket. */
 export function encodeWifiMessage(message: WifiTransportMessage): Buffer {
   const payload = Buffer.from(JSON.stringify(message), 'utf8');
   const header = Buffer.alloc(HEADER_BYTES);
@@ -42,8 +42,9 @@ export function encodeWifiMessage(message: WifiTransportMessage): Buffer {
 }
 
 /**
- * Stateful decoder — one per TCP connection. Feed every `data` chunk,
- * `onMessage` fires once per complete frame however bytes were split.
+ * Creates a stateful frame decoder for one TCP connection. Feed every
+ * `data` chunk into the returned function; `onMessage` fires once per
+ * complete frame however the bytes were split across chunks.
  */
 export function createWifiFrameDecoder() {
   let buffer = Buffer.alloc(0);

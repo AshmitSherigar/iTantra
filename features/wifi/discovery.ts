@@ -41,15 +41,26 @@ function getUdp(): any | null {
 }
 
 /**
- * UDP presence broadcast — every phone shouts "I'm here" once a second and
- * listens for the same from others on the LAN. No internet involved.
+ * UDP presence discovery for WiFi LAN chat.
  *
- * Improvements over the `transport/discovery.ts` prototype:
- * - `deviceId` (stable per install) ignores self even when two phones share
- *   the same display name; legacy payloads without it fall back to name.
- * - Accepts both `vaanisetu-announce` and legacy `itantra-announce`.
- * - Never throws on web / missing native module — returns a noop stop fn
- *   and lets the hook surface a friendly error instead.
+ * Every phone broadcasts a small "I'm here" packet once a second and
+ * listens for the same packets from others on the same network — no
+ * internet involved. Packets carry the display name, stable device id
+ * and TCP port; the sender's LAN address comes from the packet itself.
+ *
+ * Self packets (matching `deviceId`, or matching `deviceName` when the
+ * sender omitted the id) are ignored. Anything that isn't one of the
+ * accepted announce kinds is ignored. Safe to call where the native UDP
+ * module is missing (web / Expo Go): logs a warning and returns a noop
+ * stop function instead of throwing.
+ *
+ * @param deviceName Display name announced to other phones.
+ * @param deviceId Stable per-install id used to ignore our own packets
+ * and to tell same-name phones apart.
+ * @param tcpPort TCP port announced so peers know where to dial.
+ * @param onPeerFound Called for every accepted announce, including
+ * repeats (callers refresh `lastSeen`).
+ * @returns Stop function that clears the timer and closes the socket.
  */
 export function startWifiDiscovery(
   deviceName: string,

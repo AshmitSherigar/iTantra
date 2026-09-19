@@ -10,7 +10,7 @@ function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
-/** Resolve once the shared TTS engine is idle (queue drained). */
+/** Waits until the shared TTS engine drains its queue (or times out). */
 async function waitForTtsIdle(): Promise<void> {
   const started = Date.now();
   for (;;) {
@@ -21,6 +21,7 @@ async function waitForTtsIdle(): Promise<void> {
   }
 }
 
+/** One message to speak: text plus the sender's language id. */
 export type WifiIncomingSpeech = {
   text: string;
   /** BCP-47 / app lang id carried on the wire (`msg.lang`). */
@@ -28,19 +29,16 @@ export type WifiIncomingSpeech = {
 };
 
 /**
- * WiFi voice: speaks incoming messages in the SENDER's language.
+ * WiFi voice: speaks incoming messages in the sender's language.
  *
- * Why this exists instead of `useAutoSpeak`: the 1-to-1 chat loads ONE
- * voice (the receiver's selected language) and speaks everything with it.
- * A Hindi message spoken through the English VITS model comes out as
- * English-accented gibberish — the reported "hindi tts not speaking
- * properly" bug. This hook switches the shared engine to `msg.lang`
- * before speaking, exactly like `useMeshSpeech` does for BLE broadcasts.
+ * Loads the voice model matching each message's `lang` before speaking,
+ * so Hindi arrives in a Hindi voice and English in an English voice.
+ * Messages are spoken serially in arrival order; a language switch waits
+ * for the current utterance to finish so voices never chop each other.
+ * Model init is idempotent per path, so same-language bursts load once.
+ * Shares the `hindiTTS` singleton with the rest of the app.
  *
- * - Serial queue: messages speak in arrival order; a language switch waits
- *   for the current utterance to finish so voices never chop each other.
- * - Shares the `hindiTTS` singleton. Init is idempotent per model path,
- *   so same-language bursts load once.
+ * @param defaultEnabled Initial on/off state for auto-speak.
  */
 export function useWifiSpeech(defaultEnabled = true) {
   const [enabled, setEnabledState] = useState(defaultEnabled);
@@ -67,6 +65,7 @@ export function useWifiSpeech(defaultEnabled = true) {
     return () => clearInterval(id);
   }, []);
 
+  /** Toggles auto-speak; turning off stops any in-flight speech. */
   const setEnabled = useCallback((v: boolean) => {
     setEnabledState(v);
     if (!v) {
@@ -75,11 +74,16 @@ export function useWifiSpeech(defaultEnabled = true) {
     }
   }, []);
 
+  /** Stops any in-flight speech immediately. */
   const stop = useCallback(() => {
     hindiTTS.stop().catch(() => {});
     if (mountedRef.current) setIsSpeaking(false);
   }, []);
 
+  /**
+   * Queues one incoming message for speech in its own language. Empty
+   * texts and web platforms are no-ops. Never throws.
+   */
   const speakMessage = useCallback((incoming: WifiIncomingSpeech) => {
     if (Platform.OS === 'web') return;
     const text = incoming?.text?.trim();

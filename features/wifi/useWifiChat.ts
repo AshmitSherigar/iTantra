@@ -14,13 +14,21 @@ import { WifiChatTransport } from './WifiTransport';
 import { startWifiDiscovery } from './discovery';
 
 export type UseWifiChatOpts = {
+  /** Display name announced to and shown on other phones. */
   deviceName: string;
   /** Stable per-install id — generated once by the screen. */
   deviceId: string;
+  /** App language id stamped on outgoing messages for sender-side TTS. */
   lang?: string;
+  /** Start the TCP server on mount so peers can dial us. Defaults true. */
   autoHost?: boolean;
 };
 
+/**
+ * Merges one freshly announced peer into the list: refreshes the entry
+ * when the address is known, collapses a DHCP address change by device
+ * id, or appends new phones up to the cap.
+ */
 function mergePeer(prev: WifiPeer[], incoming: WifiPeer): WifiPeer[] {
   const byAddr = prev.findIndex((p) => p.address === incoming.address);
   if (byAddr !== -1) {
@@ -43,11 +51,11 @@ function mergePeer(prev: WifiPeer[], incoming: WifiPeer): WifiPeer[] {
 /**
  * WiFi LAN chat state — the hook screens actually import.
  *
- * - UDP discovery lists ALL phones on the same WiFi (no internet).
- * - TCP transport holds N simultaneous chats (multi-peer, unlike the
- *   single-socket `transport/` prototype).
- * - Bluetooth is untouched — this hook never imports from
- *   `features/bluetooth`.
+ * Combines UDP discovery (every phone on the same WiFi, no internet)
+ * with the multi-peer TCP transport: `peers` lists discovered phones,
+ * `connectedAddresses` lists open chats, and `messages` holds both
+ * broadcast (`peerAddress: 'broadcast'`) and private threads.
+ * This hook never imports from `features/bluetooth`.
  */
 export function useWifiChat(opts: UseWifiChatOpts) {
   const { deviceName, deviceId, lang = 'en', autoHost = true } = opts;
@@ -101,7 +109,7 @@ export function useWifiChat(opts: UseWifiChatOpts) {
       if (!text) return;
       const peerName = (msg.senderName ?? '').trim() || fromAddress;
       // Broadcasts land on the global page; directs stay private.
-      // Legacy peers omit `scope` → treated as direct (old behavior).
+      // Messages without `scope` are treated as direct.
       const isBroadcast = msg.scope === 'broadcast';
       setMessages((prev) =>
         [
@@ -167,6 +175,10 @@ export function useWifiChat(opts: UseWifiChatOpts) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deviceId, autoHost]);
 
+  /**
+   * Starts the TCP server so peers can dial us. Returns false when the
+   * native TCP module is unavailable (Expo Go / web).
+   */
   const startHosting = useCallback(() => {
     const ok = transportRef.current?.ensureServer() ?? false;
     if (!ok) {
@@ -179,6 +191,10 @@ export function useWifiChat(opts: UseWifiChatOpts) {
     return true;
   }, []);
 
+  /**
+   * Dials one peer by LAN address. Also ensures the server is up so the
+   * peer (and future third phones) can dial back.
+   */
   const connectTo = useCallback((address: string) => {
     const target = address.trim();
     if (!target) return;
@@ -189,15 +205,21 @@ export function useWifiChat(opts: UseWifiChatOpts) {
     transportRef.current?.connectToHost(target);
   }, []);
 
+  /** Drops one peer connection. */
   const disconnectPeer = useCallback((address: string) => {
     transportRef.current?.disconnectPeer(address);
   }, []);
 
+  /** Drops every connection and clears the message list. */
   const disconnectAll = useCallback(() => {
     transportRef.current?.disconnect();
     setMessages([]);
   }, []);
 
+  /**
+   * Sends a private message to one peer and appends our bubble to that
+   * peer's thread. Returns false when the text is blank.
+   */
   const sendToPeer = useCallback(
     (address: string, text: string) => {
       const trimmed = text.trim();
@@ -230,6 +252,10 @@ export function useWifiChat(opts: UseWifiChatOpts) {
     [peers],
   );
 
+  /**
+   * Broadcasts a message to every connected peer and appends our bubble
+   * to the global thread. Returns per-link delivered/attempted counts.
+   */
   const broadcast = useCallback((text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return { delivered: 0, attempted: 0 };
@@ -258,6 +284,7 @@ export function useWifiChat(opts: UseWifiChatOpts) {
     return res;
   }, []);
 
+  /** Clears the message list (connections are kept). */
   const clearMessages = useCallback(() => setMessages([]), []);
 
   const connectedPeers = useMemo(

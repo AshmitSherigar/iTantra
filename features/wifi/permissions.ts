@@ -18,16 +18,14 @@ export type WifiPermissionResult = {
 /**
  * Runtime permissions for WiFi LAN chat.
  *
- * - UDP discovery + TCP sockets need no BT permissions, but Android still
- *   treats LAN scans as location-adjacent: `ACCESS_FINE_LOCATION` is
- *   required on API 23+.
- * - `NEARBY_WIFI_DEVICES` (API 33+) is best-effort: we request it for
- *   accurate SSID / peer visibility, but a denial must NOT block chat —
- *   otherwise users who grant Location yet skip Nearby get stuck in a
- *   re-prompt loop ("still asking even after giving permission").
- * - No internet permission prompt is needed at runtime (`INTERNET` is
- *   install-time). Chatting works with mobile data off — same WiFi only.
+ * Android treats LAN discovery as location-adjacent, so
+ * `ACCESS_FINE_LOCATION` is requested on API 23+. `NEARBY_WIFI_DEVICES`
+ * (API 33+) is requested separately as best-effort: chat proceeds when
+ * Location is granted even if Nearby is skipped. `INTERNET` and the WiFi
+ * state permissions are install-time only and need no runtime prompt.
+ * Chatting works with mobile data off — same WiFi only.
  */
+/** Runtime permission strings that gate WiFi discovery on this device. */
 export function getRequiredWifiPermissions(): string[] {
   if (Platform.OS !== 'android') return [];
   const perms = PermissionsAndroid?.PERMISSIONS as
@@ -39,6 +37,7 @@ export function getRequiredWifiPermissions(): string[] {
   return out.filter((p): p is string => typeof p === 'string' && p.length > 0);
 }
 
+/** Optional permission strings requested opportunistically, never gating. */
 function getBestEffortWifiPermissions(): string[] {
   if (Platform.OS !== 'android') return [];
   if (getApiLevel() < 33) return [];
@@ -48,7 +47,10 @@ function getBestEffortWifiPermissions(): string[] {
   return typeof nearby === 'string' && nearby.length > 0 ? [nearby] : [];
 }
 
-/** Silent check — no system dialog. True when LAN chat may proceed. */
+/**
+ * Checks the gating permissions silently. Shows no system dialog.
+ * Returns true when LAN chat may proceed.
+ */
 export async function checkWifiPermissions(): Promise<boolean> {
   if (Platform.OS !== 'android') return true;
   const required = getRequiredWifiPermissions();
@@ -63,6 +65,12 @@ export async function checkWifiPermissions(): Promise<boolean> {
   }
 }
 
+/**
+ * Ensures the gating permissions, prompting once when missing. Already
+ * granted permissions never prompt again. Returns whether chat may
+ * proceed, which permissions are still missing, and whether the user
+ * permanently denied (open Settings instead of re-prompting).
+ */
 export async function ensureWifiPermissions(): Promise<WifiPermissionResult> {
   if (Platform.OS !== 'android')
     return { granted: true, missing: [], needsSettings: false };
@@ -103,7 +111,7 @@ export async function ensureWifiPermissions(): Promise<WifiPermissionResult> {
   }
 }
 
-/** Best-effort Nearby request — never blocks, never alerts. */
+/** Requests the opportunistic permissions once. Never blocks or alerts. */
 let bestEffortRequested = false;
 async function requestBestEffortOnce(): Promise<void> {
   if (bestEffortRequested || Platform.OS !== 'android') return;
@@ -122,6 +130,10 @@ async function requestBestEffortOnce(): Promise<void> {
   }
 }
 
+/**
+ * Shows the "permission required" alert for a denied result. Offers Open
+ * Settings only when the denial was permanent.
+ */
 export function showWifiPermissionDeniedAlert(result: WifiPermissionResult) {
   const names =
     result.missing.length > 0 ? result.missing.join(', ') : 'Location';

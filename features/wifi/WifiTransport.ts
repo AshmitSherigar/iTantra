@@ -59,18 +59,19 @@ function socketAddress(socket: any, fallback: string): string {
 }
 
 /**
- * Multi-peer WiFi chat transport.
+ * Multi-peer WiFi chat transport over TCP.
  *
- * Unlike the single-socket `transport/WifiTransport.ts` prototype (one
- * `socket` field — a second peer overwrote the first), this keeps a
- * `Map<address, socket>` so one phone can chat with ALL devices on the
- * same WiFi network simultaneously.
+ * Holds one socket per connected phone in a `Map<address, socket>` so a
+ * single phone can chat with every device on the same WiFi network at
+ * once.
  *
- * - TCP server listens on `WIFI_TCP_PORT` for inbound peers.
- * - `connectTo()` dials outbound peers and auto-reconnects with backoff.
- * - Heartbeats are per-connection; dead links are pruned, live ones stay.
- * - Sends queue per-peer while offline so a brief drop doesn't lose text.
- * - Wire format is compatible with the old prototype.
+ * - `ensureServer` / `startAsHost` opens the TCP server that listens for
+ *   inbound peers.
+ * - `connectToHost` dials one outbound peer and retries with exponential
+ *   backoff while it stays wanted.
+ * - `sendTo` targets one peer (queues while offline); `broadcast` floods
+ *   every open connection and reports per-link counts.
+ * - A per-connection heartbeat prunes dead links; live ones are untouched.
  */
 export class WifiChatTransport {
   private server: any | null = null;
@@ -87,6 +88,7 @@ export class WifiChatTransport {
   private peersListeners: PeersListener[] = [];
   private hosting = false;
 
+  /** Subscribes to decoded inbound chat messages. Returns an unsubscribe fn. */
   onMessage(listener: MessageListener): () => void {
     this.messageListeners.push(listener);
     return () => {
@@ -96,6 +98,7 @@ export class WifiChatTransport {
     };
   }
 
+  /** Subscribes to connection-status changes. Returns an unsubscribe fn. */
   onStatusChange(listener: StatusListener): () => void {
     this.statusListeners.push(listener);
     return () => {
@@ -103,6 +106,7 @@ export class WifiChatTransport {
     };
   }
 
+  /** Subscribes to the connected-address list. Returns an unsubscribe fn. */
   onPeersChange(listener: PeersListener): () => void {
     this.peersListeners.push(listener);
     return () => {
@@ -110,19 +114,26 @@ export class WifiChatTransport {
     };
   }
 
+  /** Current lifecycle status derived from server + open connections. */
   getStatus(): WifiConnectionStatus {
     return this.status;
   }
 
+  /** LAN addresses of every currently open connection. */
   getConnectedAddresses(): string[] {
     return [...this.conns.keys()];
   }
 
+  /** Whether the TCP server is currently listening for inbound peers. */
   isHosting(): boolean {
     return this.hosting;
   }
 
-  /** Start (or reuse) the TCP server so other LAN phones can connect. */
+  /**
+   * Starts the TCP server if it isn't running so other LAN phones can
+   * connect. Reuses the existing server when already hosting.
+   * Returns false when the native TCP module is unavailable.
+   */
   ensureServer(): boolean {
     const TcpSocket = getTcpSocket();
     if (!TcpSocket) {
@@ -153,11 +164,16 @@ export class WifiChatTransport {
     }
   }
 
+  /** Alias for `ensureServer` used by the host button. */
   startAsHost(): boolean {
     return this.ensureServer();
   }
 
-  /** Dial one discovered peer. Safe to call repeatedly — dedupes. */
+  /**
+   * Dials one peer by LAN address. No-ops when already connected to it.
+   * The peer stays wanted until `disconnectPeer`/`disconnect`, so drops
+   * retry automatically with exponential backoff.
+   */
   connectToHost(host: string): void {
     const target = host.trim();
     if (!target || this.conns.has(target)) return;
@@ -186,6 +202,11 @@ export class WifiChatTransport {
     }
   }
 
+  /**
+   * Sends one message to a single peer. Stamps version/sequence/timestamp
+   * automatically. When offline for that peer, the message is queued and
+   * flushed on reconnect so brief drops don't lose text.
+   */
   sendTo(
     address: string,
     partial: Omit<WifiTransportMessage, 'v' | 'seq' | 'ts'>,
@@ -209,7 +230,10 @@ export class WifiChatTransport {
     return message;
   }
 
-  /** Flood to every connected peer. Returns per-link counts. */
+  /**
+   * Sends one message to every connected peer. Returns how many links
+   * were tried and how many writes succeeded.
+   */
   broadcast(partial: Omit<WifiTransportMessage, 'v' | 'seq' | 'ts'>): {
     delivered: number;
     attempted: number;
@@ -236,6 +260,10 @@ export class WifiChatTransport {
     return { delivered, attempted: addresses.length };
   }
 
+  /**
+   * Drops one peer: stops its reconnect timer, forgets its queued
+   * messages and destroys its socket.
+   */
   disconnectPeer(address: string): void {
     this.clearReconnect(address);
     this.outboundHosts.delete(address);
@@ -252,6 +280,10 @@ export class WifiChatTransport {
     this.refreshStatus();
   }
 
+  /**
+   * Tears everything down: stops heartbeats/reconnects, destroys all
+   * sockets, closes the server and resets status to idle.
+   */
   disconnect(): void {
     this.clearHeartbeat();
     for (const t of this.reconnectTimers.values()) clearTimeout(t);
