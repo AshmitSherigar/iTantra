@@ -37,6 +37,11 @@ export default function SosScreen() {
     sendManualSos,
     retryPendingSos,
     clearInbox,
+    sirenEnabled,
+    setSirenEnabled,
+    sirenPlaying,
+    stopSiren,
+    testSiren,
   } = useSos();
 
   const [presetMinutes, setPresetMinutes] = useState<number>(180);
@@ -393,6 +398,60 @@ export default function SosScreen() {
         <Text style={[styles.finePrint, { color: colors.textSecondary, textAlign: 'center' }]}>
           Manual SOS floods to all nearby phones immediately (3 tries).
         </Text>
+
+        {/* Siren & alerts — loops a loud siren on incoming SOS + on missed check-in */}
+        <View
+          style={[
+            styles.card,
+            {
+              backgroundColor: colors.surface,
+              borderColor: sirenPlaying ? colors.error : colors.border,
+            },
+          ]}
+        >
+          <View style={styles.locationRow}>
+            <Ionicons
+              name={sirenEnabled ? 'megaphone' : 'megaphone-outline'}
+              size={18}
+              color={sirenPlaying ? colors.error : sirenEnabled ? colors.primary : colors.textSecondary}
+            />
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.locationTitle, { color: colors.text }]}>
+                SOS siren{sirenPlaying ? ' — SOUNDING' : ''}
+              </Text>
+              <Text style={[styles.muted, { color: colors.textSecondary }]}>
+                Loops on incoming SOS and on your missed check-in
+              </Text>
+            </View>
+            <Switch
+              value={sirenEnabled}
+              onValueChange={setSirenEnabled}
+              trackColor={{ true: colors.primary, false: colors.border }}
+            />
+          </View>
+          <View style={styles.extendRow}>
+            <TouchableOpacity
+              style={[styles.extendButton, { backgroundColor: colors.inputBackground }]}
+              onPress={() => void testSiren()}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.extendText, { color: colors.text }]}>Test siren</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.extendButton,
+                { backgroundColor: sirenPlaying ? colors.error : colors.inputBackground, opacity: sirenPlaying ? 1 : 0.5 },
+              ]}
+              onPress={() => void stopSiren()}
+              disabled={!sirenPlaying}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.extendText, { color: sirenPlaying ? '#FFFFFF' : colors.text }]}>
+                Stop siren
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
 
         {lastResult ? (
           <Text style={[styles.resultLine, { color: colors.textSecondary }]}>{lastResult}</Text>

@@ -59,6 +59,7 @@
       ],
       "expo-asset",
       "./plugins/withSherpaModelAssets",
+      "./plugins/withSosForegroundService",
       [
         "expo-notifications",
         {

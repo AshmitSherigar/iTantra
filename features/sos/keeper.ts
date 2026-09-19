@@ -28,6 +28,23 @@ try {
   BG = null;
 }
 
+/**
+ * True only when the native service module is linked into this build.
+ * Guards old builds (pre-keeper) so we skip native instead of crashing.
+ */
+function hasKeeperNativeModule(): boolean {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { NativeModules } = require('react-native');
+    const native = NativeModules?.RNBackgroundActions as
+      | { start?: unknown }
+      | undefined;
+    return !!native && typeof native.start === 'function';
+  } catch {
+    return false;
+  }
+}
+
 const expireListeners = new Set<() => void>();
 
 export function onSosKeeperExpire(listener: () => void): () => void {
@@ -77,8 +94,8 @@ export async function startSosKeeper(input: {
   deadlineAt: number;
   workspaceLabel: string;
 }): Promise<boolean> {
-  if (!BG) {
-    console.warn('[SOS] background-actions missing — keeper disabled');
+  if (!BG || !hasKeeperNativeModule()) {
+    console.warn('[SOS] keeper native module missing — keeper disabled');
     return false;
   }
   const when = new Date(input.deadlineAt).toLocaleTimeString();
@@ -101,6 +118,9 @@ export async function startSosKeeper(input: {
       taskIcon: { name: 'ic_launcher', type: 'mipmap' },
       color: '#DC2626',
       linkingURI: 'lowlatencysttapp://',
+      // Required on Android 14+: startForeground() with no type throws
+      // MissingForegroundServiceTypeException and the app closes.
+      foregroundServiceType: ['specialUse'],
       parameters: { deadlineAt: input.deadlineAt },
     });
     return true;

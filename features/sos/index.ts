@@ -6,3 +6,4 @@ export * from './notify';
 export * from './background';
 export * from './links';
 export * from './keeper';
+export * from './siren';

@@ -33,6 +33,11 @@ import {
   tryGetLocation,
 } from '../features/sos';
 import {
+  onSirenPlayingChange,
+  playSosSiren,
+  stopSosSiren,
+} from '../features/sos/siren';
+import {
   onSosKeeperExpire,
   startSosKeeper,
   stopSosKeeper,
@@ -85,6 +90,12 @@ type SosContextType = {
   retryPendingSos: () => Promise<boolean>;
   clearInbox: () => void;
   clearResult: () => void;
+  /** Loop the siren for incoming SOS. Persisted. */
+  sirenEnabled: boolean;
+  setSirenEnabled: (on: boolean) => void;
+  sirenPlaying: boolean;
+  stopSiren: () => Promise<void>;
+  testSiren: () => Promise<void>;
 };
 
 const SosContext = createContext<SosContextType | null>(null);
@@ -100,6 +111,8 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
     at: number;
   } | null>(null);
   const [inbox, setInbox] = useState<ReceivedSos[]>([]);
+  const [sirenEnabled, setSirenEnabledState] = useState(true);
+  const [sirenPlaying, setSirenPlaying] = useState(false);
 
   const langRef = useRef(selectedLanguage.id);
   useEffect(() => {
@@ -112,8 +125,17 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
   }, [activeTimer]);
 
   const firingRef = useRef(false);
+  const sirenEnabledRef = useRef(true);
+  useEffect(() => {
+    sirenEnabledRef.current = sirenEnabled;
+  }, [sirenEnabled]);
+  // Mesh already de-dupes by id, but guard side effects (siren + heads-up)
+  // against double-subscription in dev StrictMode.
+  const alertedSosIdsRef = useRef(new Set<string>());
 
   // ---- incoming SOS inbox (structured OR legacy prefix) ----
+  // New arrivals also raise a heads-up notification (fires in background)
+  // and loop the siren so nearby rescuers hear it.
   useEffect(
     () =>
       subscribeToBroadcasts((envelope) => {
@@ -133,9 +155,59 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
             ...current,
           ].slice(0, 30);
         });
+        if (alertedSosIdsRef.current.has(envelope.id)) return;
+        alertedSosIdsRef.current.add(envelope.id);
+        void showImmediate(
+          '🆘 SOS Emergency',
+          `${envelope.senderName}: ${envelope.message}`.slice(0, 240),
+        );
+        if (sirenEnabledRef.current) {
+          void playSosSiren();
+        }
       }),
     [],
   );
+
+  // Persisted siren preference + live playing state for the SOS tab.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+        const stored = await AsyncStorage.getItem('sos:siren-enabled-v1');
+        if (!cancelled && stored !== null) {
+          const on = stored === '1';
+          setSirenEnabledState(on);
+          sirenEnabledRef.current = on;
+        }
+      } catch {}
+    })();
+    return onSirenPlayingChange((on) => {
+      if (!cancelled) setSirenPlaying(on);
+    });
+  }, []);
+
+  const setSirenEnabled = useCallback((on: boolean) => {
+    setSirenEnabledState(on);
+    sirenEnabledRef.current = on;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+      void AsyncStorage.setItem('sos:siren-enabled-v1', on ? '1' : '0');
+    } catch {}
+    if (!on) {
+      void stopSosSiren();
+    }
+  }, []);
+
+  const stopSiren = useCallback(async () => {
+    await stopSosSiren();
+  }, []);
+
+  const testSiren = useCallback(async () => {
+    await playSosSiren();
+  }, []);
 
   const floodSos = useCallback(
     async (message: string, sosMeta: { startedAt: number; deadlineAt: number; isAuto: boolean; workspaceLabel?: string; lat?: number; lon?: number }): Promise<boolean> => {
@@ -201,6 +273,11 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
         await stopSosKeeper().catch(() => {});
         setActiveTimer(null);
         setRemainingMs(0);
+        // Sound the siren on the sender's phone too — a missed check-in
+        // means the user may be incapacitated nearby; noise draws rescuers.
+        if (sirenEnabledRef.current) {
+          void playSosSiren();
+        }
         if (ok) {
           setLastResult(`🆘 SOS broadcasted at ${new Date().toLocaleTimeString()}. Nearby phones relay it further.`);
           setPendingRetry(null);
@@ -485,6 +562,11 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
       retryPendingSos,
       clearInbox,
       clearResult,
+      sirenEnabled,
+      setSirenEnabled,
+      sirenPlaying,
+      stopSiren,
+      testSiren,
     }),
     [
       activeTimer,
@@ -500,6 +582,11 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
       retryPendingSos,
       clearInbox,
       clearResult,
+      sirenEnabled,
+      setSirenEnabled,
+      sirenPlaying,
+      stopSiren,
+      testSiren,
     ],
   );
 
