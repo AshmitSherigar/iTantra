@@ -62,6 +62,16 @@ export default function TabsLayout() {
         }}
       />
 
+        <Tabs.Screen
+          name="sos"
+          options={{
+            title: 'SOS',
+            tabBarIcon: ({ color, size }) => (
+              <Ionicons name="alert-circle-outline" size={size} color={color} />
+            ),
+          }}
+        />
+
       <Tabs.Screen
         name="settings"
         options={{
