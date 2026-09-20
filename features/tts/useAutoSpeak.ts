@@ -22,6 +22,12 @@ export type AutoSpeakApi = {
   pushStreamText: (newText: string) => void;
   /** Flush the tail of the streamed utterance. */
   endStream: () => void;
+  /**
+   * Drop buffered-but-unspoken stream text without speaking it (e.g. the
+   * payload turned out to be mesh JSON, not chat). Already-queued speech
+   * is untouched.
+   */
+  discardStream: () => void;
   stop: () => void;
   /**
    * Load the TTS model for one language on demand (call when BLE devices
@@ -180,6 +186,15 @@ export function useAutoSpeak(
     }
   }, []);
 
+  const discardStream = useCallback(() => {
+    if (Platform.OS === 'web') return;
+    try {
+      hindiTTS.discardStreamingBuffer();
+    } catch (err) {
+      console.warn('[useAutoSpeak] discardStream failed:', err);
+    }
+  }, []);
+
   const stop = useCallback(() => {
     hindiTTS.stop().catch(() => {});
   }, []);
@@ -203,6 +218,7 @@ export function useAutoSpeak(
     beginStream,
     pushStreamText,
     endStream,
+    discardStream,
     stop,
     ensureReady,
     release,

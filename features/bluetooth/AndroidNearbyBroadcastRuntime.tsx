@@ -21,6 +21,7 @@ const noopTts: StreamTts = {
   beginStream: () => {},
   pushText: () => {},
   endStream: () => {},
+  discardStream: () => {},
 };
 
 const sleep = (ms: number) =>

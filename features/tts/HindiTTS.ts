@@ -323,9 +323,19 @@ class HindiTTS implements ITTSService {
     }
   }
 
+  /**
+   * Drop buffered-but-unspoken stream text WITHOUT speaking it and without
+   * touching already-queued speech. Used when a streamed payload turns out
+   * to be something that must never be spoken (mesh broadcast JSON detected
+   * mid-stream, corrupt bytes) — otherwise finishStreamingUtterance() would
+   * speak the buffered gibberish as a tail.
+   */
+  discardStreamingBuffer(): void {
+    this.streamBuffer = '';
+  }
+
   /** Speak whatever partial text is left in the stream buffer. */
-  finishStreamingUtterance(): void {
-    if (!this.engine || !this.status.isInitialized) {
+  finishStreamingUtterance(): void {    if (!this.engine || !this.status.isInitialized) {
       this.streamBuffer = '';
       return;
     }

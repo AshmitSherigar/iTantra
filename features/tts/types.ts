@@ -39,6 +39,8 @@ export interface ITTSService {
   appendStreamingText(partialText: string): void;
   /** Flush whatever is left in the stream buffer into the queue. */
   finishStreamingUtterance(): void;
+  /** Drop buffered-but-unspoken stream text without speaking it. */
+  discardStreamingBuffer(): void;
   stop(): Promise<void>;
   destroy(): Promise<void>;
   getStatus(): TTSStatus;

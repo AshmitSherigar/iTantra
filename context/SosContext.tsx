@@ -24,6 +24,7 @@ import {
   buildSosHelpText,
   cancelScheduled,
   clearActiveTimer,
+  isKeeperKnownGood,
   loadActiveTimer,
   registerSosBackgroundTask,
   saveActiveTimer,
@@ -31,6 +32,7 @@ import {
   scheduleTimerNotifications,
   showImmediate,
   tryGetLocation,
+  wasLastKeeperStartFatal,
 } from '../features/sos';
 import {
   onSirenPlayingChange,
@@ -238,6 +240,10 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
       if (firingRef.current) return;
       firingRef.current = true;
       setIsFiring(true);
+      // Built before any await that can throw, so the SOS content is never
+      // lost: even on unexpected failure the timer is cleared and the
+      // message is kept as a re-sendable pending retry.
+      let message: string | null = null;
       try {
         // Refresh location at fire time when the user opted in.
         let lat = timer.lat;
@@ -251,7 +257,7 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
             }
           } catch {}
         }
-        const message = buildSosHelpText({
+        message = buildSosHelpText({
           helpMessage: timer.helpMessage,
           workspaceLabel: timer.workspaceLabel,
           lat,
@@ -288,6 +294,28 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
           await saveLastFired({ at: Date.now(), message });
           await showImmediate('🆘 SOS not delivered', 'No nearby phones found. Tap Re-send in the SOS tab when phones are near.');
         }
+      } catch (e) {
+        // Never let an expired timer persist: a stuck timer + keeper
+        // re-arm is exactly what caused the open-crash loop. Keep the
+        // message (if built) as a manual re-send instead.
+        console.warn('[SOS] fire expired timer failed:', e);
+        try {
+          await clearActiveTimer();
+        } catch {}
+        try {
+          await cancelScheduled(timer.notificationIds ?? []);
+        } catch {}
+        try {
+          await stopSosKeeper();
+        } catch {}
+        setActiveTimer(null);
+        setRemainingMs(0);
+        if (message) {
+          setPendingRetry({ message, at: Date.now() });
+          setLastResult('SOS timer expired but auto-send failed. Tap Re-send when phones are near.');
+        } else {
+          setLastResult('SOS timer expired.');
+        }
       } finally {
         firingRef.current = false;
         setIsFiring(false);
@@ -314,21 +342,65 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
     });
     let cancelled = false;
     (async () => {
-      void registerSosBackgroundTask().catch(() => {});
-      const stored = await loadActiveTimer();
+      try {
+        await registerSosBackgroundTask();
+      } catch {}
+      let stored: SosTimerState | null = null;
+      try {
+        stored = await loadActiveTimer();
+      } catch {
+        stored = null;
+      }
       if (cancelled || !stored) return;
       if (Date.now() >= stored.deadlineAt) {
         // Expired while dead → fire immediately on launch.
-        await fireExpiredTimerRef.current(stored);
-      } else {
-        setActiveTimer(stored);
-        setRemainingMs(stored.deadlineAt - Date.now());
-        // Re-arm the keeper after a restart so background firing keeps working.
-        void startSosKeeper({
-          deadlineAt: stored.deadlineAt,
-          workspaceLabel: stored.workspaceLabel,
-        }).catch(() => {});
+        // fireExpiredTimer always clears the timer, even on failure, so a
+        // broken fire path can never wedge the app into a crash loop.
+        try {
+          await fireExpiredTimerRef.current(stored);
+        } catch (e) {
+          console.warn('[SOS] restore fire failed:', e);
+          try {
+            await clearActiveTimer();
+          } catch {}
+        }
+        return;
       }
+      setActiveTimer(stored);
+      setRemainingMs(stored.deadlineAt - Date.now());
+      // Re-arm the keeper after a restart so background firing keeps
+      // working — BUT only when this install has already run it
+      // successfully and the last attempt wasn't fatal. A broken native
+      // service config (e.g. stale android/ prebuild without the
+      // specialUse declaration) crashes the process on start; auto
+      // re-arming it on every cold start is what made the app
+      // un-openable until the timer expired. Deferred past first render
+      // so startup UI is never blocked by it either.
+      const snapshot = stored;
+      setTimeout(() => {
+        if (cancelled) return;
+        void (async () => {
+          try {
+            const [knownGood, fatal] = await Promise.all([
+              isKeeperKnownGood(),
+              wasLastKeeperStartFatal(),
+            ]);
+            if (cancelled) return;
+            if (!knownGood || fatal) {
+              if (fatal) {
+                setLastResult(
+                  'Background keeper unavailable on this build — timer still counts down while the app is open. Re-arm the timer after updating the app to restore background firing.',
+                );
+              }
+              return;
+            }
+            await startSosKeeper({
+              deadlineAt: snapshot.deadlineAt,
+              workspaceLabel: snapshot.workspaceLabel,
+            });
+          } catch {}
+        })();
+      }, 2000);
     })();
     // Tapping the deadline notification re-opens the app — re-check expiry.
     let sub: { remove: () => void } | undefined;
@@ -389,8 +461,13 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
       if (prev) {
         await cancelScheduled(prev.notificationIds ?? []);
       }
+      // Clamp defensively: a NaN/Infinity duration would persist a
+      // never-firing timer and feed NaN into the countdown UI.
+      const safeDurationMs = Number.isFinite(input.durationMs)
+        ? Math.min(24 * 60 * 60 * 1000, Math.max(60 * 1000, input.durationMs))
+        : 60 * 1000;
       const startedAt = Date.now();
-      const deadlineAt = startedAt + Math.max(60 * 1000, input.durationMs);
+      const deadlineAt = startedAt + safeDurationMs;
       let lat: number | undefined;
       let lon: number | undefined;
       if (input.includeLocation) {

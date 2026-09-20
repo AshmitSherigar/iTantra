@@ -78,6 +78,7 @@ export default function BluetoothScreen() {
     beginStream: ttsBeginStream,
     pushStreamText: ttsPushText,
     endStream: ttsEndStream,
+    discardStream: ttsDiscardStream,
     ensureReady: ensureTtsReady,
     release: releaseTts,
   } = useAutoSpeak(true, { autoInit: false });
@@ -89,6 +90,7 @@ export default function BluetoothScreen() {
     beginStream: ttsBeginStream,
     pushText: ttsPushText,
     endStream: ttsEndStream,
+    discardStream: ttsDiscardStream,
   });
   useEffect(() => {
     ttsRef.current = {
@@ -96,8 +98,15 @@ export default function BluetoothScreen() {
       beginStream: ttsBeginStream,
       pushText: ttsPushText,
       endStream: ttsEndStream,
+      discardStream: ttsDiscardStream,
     };
-  }, [speakFullMessage, ttsBeginStream, ttsPushText, ttsEndStream]);
+  }, [
+    speakFullMessage,
+    ttsBeginStream,
+    ttsPushText,
+    ttsEndStream,
+    ttsDiscardStream,
+  ]);
 
   const {
     messages,

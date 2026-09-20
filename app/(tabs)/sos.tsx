@@ -65,7 +65,10 @@ export default function SosScreen() {
   const progress = useMemo(() => {
     if (!activeTimer) return 0;
     const total = activeTimer.durationMs;
-    if (total <= 0) return 0;
+    // Guard NaN/corrupt values: an invalid width ("NaN%") crashes layout.
+    if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(remainingMs)) {
+      return 0;
+    }
     return Math.min(1, Math.max(0, 1 - remainingMs / total));
   }, [activeTimer, remainingMs]);
 
