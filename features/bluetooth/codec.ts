@@ -1,5 +1,6 @@
 import { Buffer } from 'buffer';
-import { MAX_HEX_PER_PACKET } from './constants';
+import { MAX_HEX_PER_PACKET } from '@/features/bluetooth/constants';
+import { logger } from '@/utils/logger';
 
 export const delay = (ms: number) =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -9,7 +10,6 @@ export const makeFrameId = () =>
     .toString(16)
     .padStart(4, '0');
 
-/** Normalise the various hex formats stacks emit (spaces, 0x, -, :, _). */
 export function cleanHex(hex: string): string {
   return hex
     .trim()
@@ -21,22 +21,19 @@ export function cleanHex(hex: string): string {
 export function hexToText(hex: string | null | undefined): string | null {
   if (hex == null) return null;
   try {
-    // Native sides disagree on formatting: Android keeps spaces, iOS only
-    // trims the ends and pads odd-length with "0" (corrupting data), and
-    // some stacks add "0x" / separators. Normalise before decoding.
     const clean = cleanHex(hex);
     if (!clean) return null;
     if (clean.length % 2 !== 0) {
-      console.warn('Dropping odd-length hex payload');
+      logger.warn('Bluetooth', 'Dropping odd-length hex payload');
       return null;
     }
     if (!/^[0-9a-f]*$/.test(clean)) {
-      console.warn('Dropping non-hex payload');
+      logger.warn('Bluetooth', 'Dropping non-hex payload');
       return null;
     }
     return Buffer.from(clean, 'hex').toString('utf-8');
   } catch (e) {
-    console.warn('Failed to decode hex to text:', e);
+    logger.warn('Bluetooth', 'Failed to decode hex to text', e);
     return null;
   }
 }
@@ -53,7 +50,6 @@ export function splitHexIntoPackets(hex: string): string[] {
   return packets;
 }
 
-/** Valid data packet during reassembly (byte-exact hex). Null when corrupt. */
 export function cleanDataPacket(hex: string): string | null {
   const clean = cleanHex(hex);
   if (!clean || clean.length % 2 !== 0 || !/^[0-9a-f]*$/.test(clean)) {

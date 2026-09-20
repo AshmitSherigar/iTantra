@@ -1,5 +1,13 @@
-import { CHUNK_DELAY_MS, MAX_HEX_PER_PACKET } from './constants';
-import { delay, makeFrameId, splitHexIntoPackets, textToHex } from './codec';
+import {
+  CHUNK_DELAY_MS,
+  MAX_HEX_PER_PACKET,
+} from '@/features/bluetooth/constants';
+import {
+  delay,
+  makeFrameId,
+  splitHexIntoPackets,
+  textToHex,
+} from '@/features/bluetooth/codec';
 
 export type PacketWriter = (packetHex: string) => Promise<void>;
 
@@ -13,12 +21,6 @@ export function buildEndFrame(id: string): string {
   return textToHex(`${US}BLK:E:${id}${US}`);
 }
 
-/**
- * Low-level send: fragments the hex payload into 20-byte BLE packets.
- * Short messages use a single packet (backward compatible). Long messages
- * use START -> data packets -> END framing so the peer can reassemble
- * byte-exact UTF-8 regardless of MTU.
- */
 export async function sendHexFramed(
   hexPayload: string,
   writeCentral: PacketWriter,

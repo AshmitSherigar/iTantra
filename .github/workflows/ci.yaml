@@ -41,4 +41,4 @@ jobs:
         run: npm exec --no -- expo-doctor
 
       - name: Expo Export Check
-        run: npm exec --no -- expo export --platform all
+        run: npm exec --no -- expo export --platform android

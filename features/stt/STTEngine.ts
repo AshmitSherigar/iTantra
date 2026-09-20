@@ -1,36 +1,18 @@
 import { Platform } from 'react-native';
 import { createSTT } from 'react-native-sherpa-onnx/stt';
+import { logger } from '@/utils/logger';
 
 type STTInstance = Awaited<ReturnType<typeof createSTT>>;
 
 export type STTStatus = {
   isInitialized: boolean;
   isInitializing: boolean;
-  /** Active model path (e.g. 'models/indiconformer'). Only one model lives in RAM at a time. */
   activeModelPath: string | null;
   lastError: string | null;
 };
 
 const DEFAULT_MODEL_PATH = 'models/stt/stt-eng';
 
-/** Default STT asset dir (English). Kept in sync with features/models/languages.ts. */
-export const DEFAULT_STT_MODEL_PATH = DEFAULT_MODEL_PATH;
-
-/**
- * Singleton owner of the native STT recognizer.
- *
- * RAM discipline (important — each model is ~200MB native):
- * - NOTHING loads at import / app start. Call `ensureInitialized()` (e.g.
- *   when two BLE devices connect) to load, and `cleanup()` on disconnect
- *   to free the native memory.
- * - Only ONE model is ever resident: `init(modelPath)` with a different
- *   path destroys the previous engine first. Adding more languages later
- *   stays safe as long as callers switch via this class instead of
- *   creating extra engines.
- *
- * Every step logs with a `[STT]` prefix so the converted text is always
- * visible in Metro/Logcat even when the caller forgets to log.
- */
 export class STTEngine {
   private stt: STTInstance | null = null;
   private initPromise: Promise<void> | null = null;
@@ -54,15 +36,6 @@ export class STTEngine {
     return this.activeModelPath;
   }
 
-  getLastError(): string | null {
-    return this.lastError;
-  }
-
-  /**
-   * Load `modelPath` (defaults to IndicConformer). Idempotent: resolves
-   * immediately if that exact model is already loaded; destroys the old
-   * engine first when switching models so RAM never holds two.
-   */
   async init(modelPath: string = DEFAULT_MODEL_PATH): Promise<void> {
     if (this.stt && this.activeModelPath === modelPath) return;
 
@@ -77,21 +50,20 @@ export class STTEngine {
 
     if (Platform.OS === 'web') {
       const msg = 'STT is not supported on web.';
-      console.warn(`[STT] ${msg}`);
+      logger.warn('STT', msg);
       this.lastError = msg;
       return;
     }
 
-    // Switching models: free the old native engine BEFORE allocating the
-    // new one so peak RAM never holds both (~400MB would OOM low-end phones).
     if (this.stt) {
-      console.log(
-        `[STT] Switching model ${this.activeModelPath} -> ${modelPath}: releasing old engine first`,
-      );
+      logger.info('STT', 'Switching model and releasing old engine first', {
+        previousModel: this.activeModelPath,
+        nextModel: modelPath,
+      });
       await this.cleanup();
     }
 
-    console.log(`[STT] Initializing model: ${modelPath} ...`);
+    logger.info('STT', 'Initializing model', { modelPath });
     this.lastError = null;
 
     this.initPromise = (async () => {
@@ -99,7 +71,6 @@ export class STTEngine {
         this.stt = await createSTT({
           modelPath: {
             type: 'asset',
-            // Points to the named subdirectory under assets/models/
             path: modelPath,
           },
           modelType: 'nemo_ctc',
@@ -108,13 +79,13 @@ export class STTEngine {
         });
         this.activeModelPath = modelPath;
         this.lastError = null;
-        console.log(`[STT] Engine initialized successfully (${modelPath})`);
+        logger.info('STT', 'Engine initialized successfully', { modelPath });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         this.lastError = msg;
         this.stt = null;
         this.activeModelPath = null;
-        console.error(`[STT] Failed to initialize (${modelPath}):`, msg);
+        logger.error('STT', 'Failed to initialize', { modelPath, error: msg });
         throw e;
       } finally {
         this.initPromise = null;
@@ -124,7 +95,6 @@ export class STTEngine {
     return this.initPromise;
   }
 
-  /** Idempotent preload — safe to call on every BLE connect. */
   async ensureInitialized(
     modelPath: string = DEFAULT_MODEL_PATH,
   ): Promise<void> {
@@ -142,26 +112,6 @@ export class STTEngine {
     return this.stt;
   }
 
-  async transcribeFile(filePath: string): Promise<string> {
-    if (!this.stt) {
-      await this.init();
-    }
-    const engine = this.requireEngine();
-    console.log(`[STT] transcribeFile started: ${filePath}`);
-    const result = await engine.transcribeFile(filePath);
-    const text = (result.text ?? '').trim();
-    if (text) {
-      console.log(
-        `[STT] transcribeFile result (${text.length} chars): "${text}"`,
-      );
-    } else {
-      console.warn(
-        '[STT] transcribeFile produced EMPTY text (no speech detected?)',
-      );
-    }
-    return result.text;
-  }
-
   async transcribeSamples(
     samples: number[],
     sampleRate: number,
@@ -171,17 +121,20 @@ export class STTEngine {
     }
     const engine = this.requireEngine();
     const seconds = samples.length / sampleRate;
-    console.log(
-      `[STT] transcribeSamples started: ${samples.length} samples @ ${sampleRate}Hz (${seconds.toFixed(1)}s), model=${this.activeModelPath}`,
-    );
+    logger.debug('STT', 'transcribeSamples started', {
+      sampleCount: samples.length,
+      sampleRate,
+      durationSeconds: Number(seconds.toFixed(1)),
+      modelPath: this.activeModelPath,
+    });
     const result = await engine.transcribeSamples(samples, sampleRate);
     const text = (result.text ?? '').trim();
     if (text) {
-      console.log(`[STT] Transcribed text (${text.length} chars): "${text}"`);
+      logger.info('STT', 'Transcription completed', {
+        characterCount: text.length,
+      });
     } else {
-      console.warn(
-        '[STT] Model returned EMPTY text — no speech detected or audio too short/noisy.',
-      );
+      logger.warn('STT', 'Model returned empty text');
     }
     return result.text;
   }
@@ -200,19 +153,18 @@ export class STTEngine {
       try {
         await this.stt.destroy();
       } catch (e) {
-        console.warn('[STT] destroy() failed (ignored):', e);
+        logger.warn('STT', 'destroy() failed (ignored)', e);
       }
       this.stt = null;
     }
     if (this.activeModelPath) {
-      console.log(
-        `[STT] Engine released (was ${this.activeModelPath}), RAM freed`,
-      );
+      logger.info('STT', 'Engine released and RAM freed', {
+        modelPath: this.activeModelPath,
+      });
     }
     this.activeModelPath = null;
   }
 
-  /** Alias for cleanup() — clearer at call sites. */
   async release(): Promise<void> {
     return this.cleanup();
   }
