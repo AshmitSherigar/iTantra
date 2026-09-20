@@ -5,6 +5,20 @@ export const MESH_DEFAULT_TTL = 5;
 /** How long the mesh waits for nearby devices per broadcast attempt. */
 export const MESH_SCAN_WINDOW_MS = 10000;
 
+export type SosMeta = {
+  /** Epoch ms when the safety timer started. */
+  startedAt: number;
+  /** Epoch ms of the missed check-in deadline (auto SOS) or send time (manual). */
+  deadlineAt: number;
+  /** True when fired automatically by an expired timer, false when tapped manually. */
+  isAuto: boolean;
+  /** Optional free-text workspace label, e.g. "Night shift". */
+  workspaceLabel?: string;
+  /** Optional "lat,lon" + maps link already embedded in message; kept structured too. */
+  lat?: number;
+  lon?: number;
+};
+
 export type BroadcastEnvelope = {
   type: typeof BROADCAST_MESSAGE_TYPE;
   id: string;
@@ -17,6 +31,13 @@ export type BroadcastEnvelope = {
    * Older app versions omit this field — treat as MESH_DEFAULT_TTL.
    */
   ttl?: number;
+  /**
+   * Optional discriminator. Old app versions ignore it and still display
+   * the message as a normal broadcast (forward compatible).
+   */
+  kind?: 'sos' | 'normal';
+  /** Present only when kind === 'sos'. */
+  sos?: SosMeta;
 };
 
 type BroadcastSender = (envelope: BroadcastEnvelope) => Promise<boolean>;
@@ -52,7 +73,40 @@ export function makeMeshEnvelope(input: {
     message: input.message,
     language: input.language,
     ttl: MESH_DEFAULT_TTL,
+    kind: 'normal',
   };
+}
+
+/** Prefix every SOS message carries so even old app versions visibly stand out. */
+export const SOS_MESSAGE_PREFIX = '🆘 SOS';
+
+export function makeSosEnvelope(input: {
+  senderName: string;
+  message: string;
+  language: string;
+  sos: SosMeta;
+}): BroadcastEnvelope {
+  return {
+    type: BROADCAST_MESSAGE_TYPE,
+    id: makeBroadcastId(),
+    senderName: input.senderName,
+    message: input.message,
+    language: input.language,
+    ttl: MESH_DEFAULT_TTL,
+    kind: 'sos',
+    sos: input.sos,
+  };
+}
+
+/** True for structured SOS envelopes OR legacy prefix matches (old senders). */
+export function isSosEnvelope(envelope: {
+  kind?: string;
+  message?: string;
+}): boolean {
+  if (!envelope) return false;
+  if ((envelope as BroadcastEnvelope).kind === 'sos') return true;
+  const msg = (envelope.message ?? '').trimStart();
+  return msg.startsWith(SOS_MESSAGE_PREFIX) || msg.startsWith('🆘');
 }
 
 export function getEnvelopeTtl(envelope: { ttl?: number }): number {
@@ -129,7 +183,33 @@ export function decodeBroadcast(text: string): BroadcastEnvelope | null {
       typeof candidate.ttl === 'number' && Number.isFinite(candidate.ttl)
         ? Math.max(0, Math.min(Math.floor(candidate.ttl), MESH_DEFAULT_TTL))
         : MESH_DEFAULT_TTL;
-    return { ...(candidate as BroadcastEnvelope), ttl };
+    const kind =
+      candidate.kind === 'sos' || candidate.kind === 'normal'
+        ? candidate.kind
+        : undefined;
+    // Preserve structured SOS meta when present; drop it when malformed so
+    // one bad sender can't break the inbox. Prefix fallback in
+    // isSosEnvelope() still catches unstructured SOS text.
+    let sos: SosMeta | undefined;
+    const rawSos = candidate.sos as Partial<SosMeta> | undefined;
+    if (kind === 'sos' && rawSos && typeof rawSos === 'object') {
+      const startedAt =
+        typeof rawSos.startedAt === 'number' ? rawSos.startedAt : Date.now();
+      const deadlineAt =
+        typeof rawSos.deadlineAt === 'number' ? rawSos.deadlineAt : Date.now();
+      sos = {
+        startedAt,
+        deadlineAt,
+        isAuto: rawSos.isAuto !== false,
+        workspaceLabel:
+          typeof rawSos.workspaceLabel === 'string'
+            ? rawSos.workspaceLabel.slice(0, 60)
+            : undefined,
+        lat: typeof rawSos.lat === 'number' ? rawSos.lat : undefined,
+        lon: typeof rawSos.lon === 'number' ? rawSos.lon : undefined,
+      };
+    }
+    return { ...(candidate as BroadcastEnvelope), ttl, kind, sos };
   } catch {
     return null;
   }

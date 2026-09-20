@@ -18,6 +18,7 @@ import * as Device from 'expo-device';
 import RecordButton from '@/components/RecordButton';
 import TranscriptBox from '@/components/TranscriptBox';
 import StatusIndicator from '@/components/StatusIndicator';
+import LinkifiedMessage from '../../features/sos/LinkifiedMessage';
 
 import { useTheme } from '../../context/ThemeContext';
 import { useLanguage } from '../../context/LanguageContext';
@@ -566,9 +567,11 @@ export default function Index() {
                     {hopLabel(item.hops)} ·{' '}
                     {new Date(item.receivedAt).toLocaleTimeString()}
                   </Text>
-                  <Text style={[styles.messageText, { color: colors.text }]}>
-                    {item.message}
-                  </Text>
+                  <LinkifiedMessage
+                    message={item.message}
+                    textStyle={[styles.messageText, { color: colors.text }]}
+                    linkColor={colors.primary}
+                  />
                 </View>
               ))}
             </View>
