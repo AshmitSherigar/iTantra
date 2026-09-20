@@ -20,8 +20,6 @@ yarn-debug.*
 yarn-error.*
 
 # Environment / secrets
-.env
-.env.*
 !.env.example
 
 # macOS
@@ -43,7 +41,6 @@ yarn-error.*
 
 # IDEs
 .idea/
-.vscode/
 
 # Audio
 *.wav
@@ -52,3 +49,4 @@ yarn-error.*
 assets/models/
 *.onnx
 
+config.bat
