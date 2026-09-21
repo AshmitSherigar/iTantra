@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   ScrollView,
   Text,
   TextInput,
@@ -11,7 +12,13 @@ import {
 import { FontSize, Radius, Spacing } from '@/constants/theme';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { router } from 'expo-router';
 import { useTheme } from '@/context/ThemeContext';
+import { useLanguage } from '@/context/LanguageContext';
+import { isLanguageInstalled, type LanguageModel } from '@/features/models/languages';
+import { useVoiceMessage } from '@/features/audio/useVoiceMessage';
+import { useAutoSpeak } from '@/features/tts/useAutoSpeak';
+import { logger } from '@/utils/logger';
 import { useWifiTransport } from '../../transport/useWifiTransport';
 
 type ChatBubble = {
@@ -20,8 +27,37 @@ type ChatBubble = {
   sender: 'me' | 'other';
 };
 
+function promptInstallLanguage(selectedLanguage: LanguageModel) {
+  Alert.alert(
+    'Language model not installed',
+    `The "${selectedLanguage.label}" voice models aren't installed yet. Install it or switch to an installed language to connect.`,
+    [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Install',
+        onPress: () =>
+          Alert.alert(
+            'Install language model',
+            `"${selectedLanguage.label}" model download isn't available yet.`,
+            [{ text: 'OK' }],
+          ),
+      },
+      {
+        text: 'View Languages',
+        onPress: () => router.push('/settings/language'),
+      },
+    ],
+  );
+}
+
 export default function WifiScreen() {
   const { colors } = useTheme();
+  const { selectedLanguage } = useLanguage();
+  const languageInstalled = isLanguageInstalled(selectedLanguage);
+  const handlePromptInstall = useCallback(
+    () => promptInstallLanguage(selectedLanguage),
+    [selectedLanguage],
+  );
 
   const [deviceName] = useState(
     () => `Phone-${Math.floor(Math.random() * 1000)}`,
@@ -34,23 +70,57 @@ export default function WifiScreen() {
   const [chatMessages, setChatMessages] = useState<ChatBubble[]>([]);
   const processedIncomingCount = useRef(0);
 
+  const {
+    isRecording: isVoiceRecording,
+    isTranscribing,
+    partialText,
+    error: voiceError,
+    sttReady,
+    sttLoading,
+    sttError,
+    startVoice,
+    stopVoice,
+    ensureSttReady,
+    releaseStt,
+  } = useVoiceMessage();
+
+  const {
+    enabled: ttsEnabled,
+    setEnabled: setTtsEnabled,
+    isReady: ttsReady,
+    isLoading: ttsLoading,
+    error: ttsError,
+    isSpeaking: ttsSpeaking,
+    stop: stopTts,
+    speakFullMessage,
+    ensureReady: ensureTtsReady,
+    release: releaseTts,
+  } = useAutoSpeak(true, { autoInit: false });
+
+  const speakFullMessageRef = useRef(speakFullMessage);
+  useEffect(() => {
+    speakFullMessageRef.current = speakFullMessage;
+  }, [speakFullMessage]);
+
   const { status, messages, peers, startHosting, connectTo, sendText, disconnect } =
     useWifiTransport(deviceName);
 
   const isConnected = status === 'connected';
 
-  // The hook only accumulates messages received from the peer, so merge new
-  // arrivals into the local chat list without re-adding ones already shown.
   useEffect(() => {
     if (messages.length <= processedIncomingCount.current) return;
     const newOnes = messages.slice(processedIncomingCount.current);
     processedIncomingCount.current = messages.length;
+    const withText = newOnes.filter((m) => m.text);
     setChatMessages((prev) => [
       ...prev,
-      ...newOnes
-        .filter((m) => m.text)
-        .map((m) => ({ id: `other-${m.seq}-${m.ts}`, text: m.text!, sender: 'other' as const })),
+      ...withText.map((m) => ({
+        id: `other-${m.seq}-${m.ts}`,
+        text: m.text!,
+        sender: 'other' as const,
+      })),
     ]);
+    withText.forEach((m) => speakFullMessageRef.current(m.text!));
   }, [messages]);
 
   useEffect(() => {
@@ -63,6 +133,46 @@ export default function WifiScreen() {
       setChatMessages([]);
     }
   }, [status, isConnected]);
+
+  useEffect(() => {
+    if (!isConnected) return;
+    if (!languageInstalled) {
+      promptInstallLanguage(selectedLanguage);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        await ensureSttReady(selectedLanguage.sttAssetPath!);
+      } catch (e) {
+        logger.warn('Wifi', 'STT load failed', e);
+        return;
+      }
+      if (cancelled) return;
+      try {
+        await ensureTtsReady(selectedLanguage.ttsAssetPath!);
+      } catch (e) {
+        logger.warn('Wifi', 'TTS load failed', e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      try {
+        stopTts();
+      } catch {}
+      void releaseStt();
+      void releaseTts();
+    };
+  }, [
+    isConnected,
+    selectedLanguage,
+    languageInstalled,
+    ensureSttReady,
+    ensureTtsReady,
+    releaseStt,
+    releaseTts,
+    stopTts,
+  ]);
 
   const handleHostPress = useCallback(() => {
     setRole('host');
@@ -95,6 +205,42 @@ export default function WifiScreen() {
     }
     setMessage('');
   }, [message, sendText]);
+
+  const handleVoiceToggle = useCallback(async () => {
+    if (!isVoiceRecording && !languageInstalled) {
+      promptInstallLanguage(selectedLanguage);
+      return;
+    }
+    try {
+      if (isVoiceRecording) {
+        const text = await stopVoice();
+        if (text) {
+          const sent = sendText(text);
+          if (sent) {
+            setChatMessages((prev) => [
+              ...prev,
+              { id: `me-${sent.seq}-${sent.ts}`, text, sender: 'me' },
+            ]);
+          }
+        }
+      } else {
+        try {
+          stopTts();
+        } catch {}
+        await startVoice();
+      }
+    } catch (e) {
+      logger.warn('Wifi', 'Voice toggle failed', e);
+    }
+  }, [
+    isVoiceRecording,
+    selectedLanguage,
+    sendText,
+    startVoice,
+    stopTts,
+    stopVoice,
+    languageInstalled,
+  ]);
 
   return (
     <SafeAreaView
@@ -214,6 +360,64 @@ export default function WifiScreen() {
               >
                 <Text style={[styles.stopButtonText, { color: colors.text }]}>
                   Stop hosting
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+
+          <View style={styles.section}>
+            <Text style={[styles.sectionTitle, { color: colors.text }]}>
+              Language
+            </Text>
+            <Text
+              style={[
+                styles.sectionDescription,
+                { color: colors.textSecondary },
+              ]}
+            >
+              Voice models for the selected language load when a chat opens.
+              Only that language stays in memory.
+            </Text>
+            <View
+              style={[
+                styles.deviceCard,
+                { backgroundColor: colors.surface, borderColor: colors.border },
+              ]}
+            >
+              <View style={styles.deviceInfo}>
+                <Text style={[styles.deviceName, { color: colors.text }]}>
+                  {selectedLanguage.label}
+                </Text>
+                <Text
+                  style={[styles.deviceId, { color: colors.textSecondary }]}
+                >
+                  {languageInstalled
+                    ? 'Installed • works offline'
+                    : 'Not installed'}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={[
+                  styles.connectButton,
+                  { backgroundColor: colors.primary },
+                ]}
+                onPress={() => router.push('/settings/language')}
+                activeOpacity={0.82}
+              >
+                <Text style={styles.connectButtonText}>Change</Text>
+              </TouchableOpacity>
+            </View>
+            {!languageInstalled ? (
+              <TouchableOpacity
+                style={[
+                  styles.stopButton,
+                  { backgroundColor: colors.inputBackground, marginTop: 8 },
+                ]}
+                onPress={handlePromptInstall}
+                activeOpacity={0.82}
+              >
+                <Text style={[styles.stopButtonText, { color: colors.text }]}>
+                  Install “{selectedLanguage.label}” models
                 </Text>
               </TouchableOpacity>
             ) : null}
@@ -341,7 +545,8 @@ export default function WifiScreen() {
                     { color: colors.textSecondary },
                   ]}
                 >
-                  {role === 'host' ? 'Host' : 'Client'} • {deviceName}
+                  {role === 'host' ? 'Host' : 'Client'} •{' '}
+                  {selectedLanguage.label}
                 </Text>
               </View>
             </View>
@@ -431,6 +636,159 @@ export default function WifiScreen() {
 
           <View
             style={[
+              styles.ttsBar,
+              {
+                backgroundColor: colors.surface,
+                borderTopColor: colors.border,
+              },
+            ]}
+          >
+            <TouchableOpacity
+              style={[
+                styles.ttsToggle,
+                {
+                  backgroundColor: ttsEnabled
+                    ? colors.primary
+                    : colors.inputBackground,
+                },
+              ]}
+              onPress={() => setTtsEnabled(!ttsEnabled)}
+              activeOpacity={0.82}
+            >
+              <Ionicons
+                name={ttsEnabled ? 'volume-high' : 'volume-mute'}
+                size={16}
+                color={ttsEnabled ? '#FFFFFF' : colors.textSecondary}
+              />
+              <Text
+                style={[
+                  styles.ttsToggleText,
+                  { color: ttsEnabled ? '#FFFFFF' : colors.textSecondary },
+                ]}
+              >
+                {ttsEnabled ? 'Auto-speak ON' : 'Auto-speak OFF'}
+              </Text>
+            </TouchableOpacity>
+
+            {!ttsReady && ttsEnabled ? (
+              <Text style={[styles.ttsStatus, { color: colors.textSecondary }]}>
+                {ttsLoading
+                  ? 'Loading voice…'
+                  : ttsError
+                    ? `Voice failed: ${ttsError}`
+                    : 'Voice not loaded'}
+              </Text>
+            ) : ttsSpeaking ? (
+              <Text style={[styles.ttsStatus, { color: colors.primary }]}>
+                🔊 Speaking…
+              </Text>
+            ) : null}
+
+            {ttsSpeaking && (
+              <TouchableOpacity
+                style={[
+                  styles.ttsStop,
+                  { backgroundColor: colors.inputBackground },
+                ]}
+                onPress={stopTts}
+                activeOpacity={0.82}
+              >
+                <Ionicons name="stop" size={16} color={colors.error} />
+                <Text style={[styles.ttsStopText, { color: colors.error }]}>
+                  Stop
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {(isVoiceRecording || isTranscribing) && (
+            <View
+              style={[
+                styles.voiceIndicator,
+                {
+                  backgroundColor: isVoiceRecording ? '#FEE2E2' : '#DBEAFE',
+                  borderTopColor: colors.border,
+                },
+              ]}
+            >
+              <View style={styles.voiceIndicatorIcon}>
+                {isTranscribing ? (
+                  <ActivityIndicator size="small" color={colors.primary} />
+                ) : (
+                  <View style={styles.recordingPulse} />
+                )}
+              </View>
+              <View style={styles.voiceIndicatorTextContainer}>
+                <Text
+                  style={[
+                    styles.voiceIndicatorText,
+                    { color: isVoiceRecording ? colors.error : colors.primary },
+                  ]}
+                >
+                  {isVoiceRecording
+                    ? 'Recording… Tap mic to stop'
+                    : 'Transcribing speech…'}
+                </Text>
+                {isVoiceRecording && partialText.length > 0 && (
+                  <Text
+                    style={[styles.partialTranscript, { color: colors.text }]}
+                    numberOfLines={2}
+                  >
+                    {partialText}
+                  </Text>
+                )}
+              </View>
+            </View>
+          )}
+
+          {(voiceError || sttError) && !isVoiceRecording && !isTranscribing && (
+            <View
+              style={[styles.voiceErrorBar, { borderTopColor: colors.border }]}
+            >
+              <Text style={[styles.voiceErrorText, { color: colors.error }]}>
+                {voiceError ?? `Speech model: ${sttError}`}
+              </Text>
+            </View>
+          )}
+
+          <View
+            style={[
+              styles.sttBar,
+              {
+                backgroundColor: colors.surface,
+                borderTopColor: colors.border,
+              },
+            ]}
+          >
+            <View style={styles.sttStatusRow}>
+              <View
+                style={[
+                  styles.statusDotSmall,
+                  {
+                    backgroundColor: sttReady
+                      ? colors.success
+                      : sttLoading
+                        ? colors.primary
+                        : colors.textSecondary,
+                  },
+                ]}
+              />
+              <Text
+                style={[styles.sttStatusText, { color: colors.textSecondary }]}
+              >
+                {sttLoading
+                  ? `Loading ${selectedLanguage.label} speech model…`
+                  : sttReady
+                    ? `${selectedLanguage.label} speech model ready`
+                    : sttError
+                      ? `Speech model failed: ${sttError}`
+                      : 'Speech model not loaded'}
+              </Text>
+            </View>
+          </View>
+
+          <View
+            style={[
               styles.inputContainer,
               {
                 backgroundColor: colors.surface,
@@ -441,14 +799,41 @@ export default function WifiScreen() {
             <TextInput
               value={message}
               onChangeText={setMessage}
-              placeholder="Type a message..."
+              placeholder={
+                isVoiceRecording ? 'Recording…' : 'Type a message...'
+              }
               placeholderTextColor={colors.textSecondary}
               style={[
                 styles.input,
                 { backgroundColor: colors.inputBackground, color: colors.text },
               ]}
               multiline
+              editable={!isVoiceRecording && !isTranscribing}
             />
+
+            <TouchableOpacity
+              style={[
+                styles.micButton,
+                {
+                  backgroundColor: isVoiceRecording
+                    ? colors.error
+                    : colors.inputBackground,
+                },
+              ]}
+              onPress={handleVoiceToggle}
+              disabled={isTranscribing}
+              activeOpacity={0.82}
+            >
+              {isTranscribing ? (
+                <ActivityIndicator size="small" color={colors.primary} />
+              ) : (
+                <Ionicons
+                  name={isVoiceRecording ? 'stop' : 'mic'}
+                  size={20}
+                  color={isVoiceRecording ? '#FFFFFF' : colors.primary}
+                />
+              )}
+            </TouchableOpacity>
 
             <TouchableOpacity
               style={[
@@ -459,7 +844,7 @@ export default function WifiScreen() {
                     : colors.inputBackground,
                 },
               ]}
-              disabled={!message.trim()}
+              disabled={!message.trim() || isVoiceRecording || isTranscribing}
               onPress={sendMessage}
               activeOpacity={0.82}
             >
@@ -782,5 +1167,129 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+
+  micButton: {
+    width: 46,
+    height: 46,
+    borderRadius: Radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  voiceIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 10,
+    borderTopWidth: 1,
+  },
+
+  voiceIndicatorIcon: {
+    marginRight: 8,
+    width: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  voiceIndicatorTextContainer: {
+    flex: 1,
+  },
+
+  voiceIndicatorText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+
+  partialTranscript: {
+    fontSize: 14,
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
+
+  recordingPulse: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#DC2626',
+  },
+
+  voiceErrorBar: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    backgroundColor: '#FEF2F2',
+  },
+
+  voiceErrorText: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+
+  ttsBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.sm + 4,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    gap: 8,
+  },
+
+  ttsToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: Radius.sm,
+  },
+
+  ttsToggleText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+
+  ttsStatus: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+
+  ttsStop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: Radius.sm,
+  },
+
+  ttsStopText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+
+  sttBar: {
+    paddingHorizontal: Spacing.sm + 4,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+  },
+
+  sttStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+
+  statusDotSmall: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+
+  sttStatusText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '600',
   },
 });
