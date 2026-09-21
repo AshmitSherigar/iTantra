@@ -41,6 +41,51 @@ yarn-error.*
 # Temporary / backup files
 *.orig.*
 
+
+android/local.properties
+# Dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native build artifacts
+/android
+/ios
+
+# Metro
+.metro-health-check*
+
+# Debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# macOS
+.DS_Store
+
+# TypeScript
+*.tsbuildinfo
+
+# Android / signing files
+*.jks
+*.keystore
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Temporary / backup files
+*.orig.*
+
 # IDEs
 .idea/
 .vscode/
@@ -51,4 +96,4 @@ yarn-error.*
 # Models
 assets/models/
 *.onnx
-
+

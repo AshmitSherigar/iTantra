@@ -98,8 +98,6 @@ export default function Index() {
     ensureSttReady,
   } = useVoiceMessage();
 
-  // Incoming mesh broadcasts are spoken in the SENDER's language (each
-  // envelope carries it), not the receiver's selected language.
   const meshSpeech = useMeshSpeech(true);
   const meshSpeechRef = useRef(meshSpeech);
   useEffect(() => {
@@ -109,7 +107,6 @@ export default function Index() {
   const languageInstalled = isLanguageInstalled(selectedLanguage);
   const sttModelPath = selectedLanguage.sttAssetPath;
 
-  // Preload the selected language's STT model so the mic is low-latency.
   useEffect(() => {
     if (!languageInstalled || !sttModelPath) return;
     void ensureSttReady(sttModelPath);
@@ -131,8 +128,6 @@ export default function Index() {
     [],
   );
 
-  // Discover neighbours once shortly after mount so the nearby list is
-  // populated even before the first broadcast.
   useEffect(() => {
     const t = setTimeout(() => {
       void requestMeshDiscovery();
@@ -180,7 +175,7 @@ export default function Index() {
         },
         {
           text: 'View Languages',
-          onPress: () => router.push('/settings/language'),
+          onPress: () => router.push('/settings/language' as any),
         },
       ],
     );
@@ -202,7 +197,6 @@ export default function Index() {
       return;
     }
 
-    // Stop mesh playback first so the mic doesn't pick up the speaker.
     try {
       meshSpeechRef.current.stop();
     } catch {}
@@ -227,8 +221,6 @@ export default function Index() {
           language: selectedLanguage.id,
         }),
       );
-      // Read the just-published flood detail (counts are module-fresh here,
-      // not the possibly-stale render state).
       const fresh = getMeshStatus();
       if (sent && fresh.lastDelivered > 0) {
         const partial = fresh.lastDelivered < fresh.lastAttempted;
@@ -283,7 +275,7 @@ export default function Index() {
     : meshSpeech.isLoadingVoice
       ? 'Loading voice…'
       : meshSpeech.enabled
-        ? 'Plays in the sender’s language'
+        ? 'Plays in the sender\'s language'
         : 'Off — messages arrive silently';
 
   return (
@@ -297,6 +289,7 @@ export default function Index() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
+        {/* Header — merged: main's ScrollView layout + wifi branch's WiFi icon */}
         <View style={styles.header}>
           <View>
             <Text style={[styles.overline, { color: colors.textSecondary }]}>
@@ -306,32 +299,40 @@ export default function Index() {
               Speech to Text
             </Text>
           </View>
+          <Pressable
+            onPress={() => router.push('/(tabs)/wifi')}
+            style={[styles.headerIcon, { backgroundColor: colors.surface }]}
+          >
+            <Ionicons name="wifi-outline" size={22} color={colors.primary} />
+          </Pressable>
+        </View>
+
+        <View
+          style={[
+            styles.livePill,
+            {
+              backgroundColor: isRecording ? colors.error : colors.surface,
+              borderColor: colors.border,
+              alignSelf: 'flex-start',
+            },
+          ]}
+        >
           <View
             style={[
-              styles.livePill,
+              styles.liveDot,
               {
-                backgroundColor: isRecording ? colors.error : colors.surface,
-                borderColor: colors.border,
+                backgroundColor: isRecording ? '#FFFFFF' : colors.success,
               },
             ]}
+          />
+          <Text
+            style={[
+              styles.liveText,
+              { color: isRecording ? '#FFFFFF' : colors.textSecondary },
+            ]}
           >
-            <View
-              style={[
-                styles.liveDot,
-                {
-                  backgroundColor: isRecording ? '#FFFFFF' : colors.success,
-                },
-              ]}
-            />
-            <Text
-              style={[
-                styles.liveText,
-                { color: isRecording ? '#FFFFFF' : colors.textSecondary },
-              ]}
-            >
-              {isRecording ? 'LIVE' : 'READY'}
-            </Text>
-          </View>
+            {isRecording ? 'LIVE' : 'READY'}
+          </Text>
         </View>
 
         <TranscriptBox
@@ -600,11 +601,12 @@ export default function Index() {
               color={colors.primary}
             />
             <Text style={[styles.installText, { color: colors.primary }]}>
-              Install “{selectedLanguage.label}” models to enable the mic
+              {'Install "{selectedLanguage.label}" models to enable the mic'}
             </Text>
           </Pressable>
         ) : null}
       </ScrollView>
+
       <View
         style={[
           styles.micDock,
@@ -653,6 +655,12 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.sm,
   },
 
+  // Added for the WiFi icon button in the header
+  headerIcon: {
+    padding: 8,
+    borderRadius: Radius.round,
+  },
+
   overline: {
     fontSize: 11,
     fontWeight: '700',
@@ -675,6 +683,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: Radius.round,
     borderWidth: 1,
+    marginBottom: Spacing.sm,
   },
 
   liveDot: {

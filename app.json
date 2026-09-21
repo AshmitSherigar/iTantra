@@ -13,6 +13,7 @@
       "bundleIdentifier": "com.anonymous.lowlatencysttapp"
     },
     "android": {
+   
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -23,6 +24,13 @@
       "predictiveBackGestureEnabled": false,
       "package": "com.anonymous.lowlatencysttapp",
       "permissions": [
+        "INTERNET",
+        "ACCESS_NETWORK_STATE",
+        "ACCESS_WIFI_STATE",
+        "CHANGE_WIFI_STATE",
+        "ACCESS_FINE_LOCATION",
+        "NEARBY_WIFI_DEVICES",
+        "CHANGE_NETWORK_STATE",
         "android.permission.BLUETOOTH",
         "android.permission.BLUETOOTH_ADMIN",
         "android.permission.BLUETOOTH_SCAN",
@@ -57,6 +65,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "306929bd-b59b-48c6-8841-036026b83299"
+      }
     }
   }
 }
