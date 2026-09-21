@@ -16,19 +16,28 @@ const MAX_TIMER_MS = 24 * 60 * 60 * 1000 + 60 * 1000;
 export function isValidSosTimer(value: unknown): value is SosTimerState {
   if (!value || typeof value !== 'object') return false;
   const t = value as Record<string, unknown>;
-  if (typeof t.deadlineAt !== 'number' || !Number.isFinite(t.deadlineAt)) return false;
-  if (typeof t.startedAt !== 'number' || !Number.isFinite(t.startedAt)) return false;
-  if (typeof t.durationMs !== 'number' || !Number.isFinite(t.durationMs)) return false;
+  if (typeof t.deadlineAt !== 'number' || !Number.isFinite(t.deadlineAt))
+    return false;
+  if (typeof t.startedAt !== 'number' || !Number.isFinite(t.startedAt))
+    return false;
+  if (typeof t.durationMs !== 'number' || !Number.isFinite(t.durationMs))
+    return false;
   if (t.durationMs <= 0 || t.durationMs > MAX_TIMER_MS) return false;
   if (t.deadlineAt <= t.startedAt) return false;
   if (t.deadlineAt - t.startedAt > MAX_TIMER_MS) return false;
   if (typeof t.helpMessage !== 'string') return false;
   if (typeof t.workspaceLabel !== 'string') return false;
   if (typeof t.includeLocation !== 'boolean') return false;
-  if (t.lat !== undefined && (typeof t.lat !== 'number' || !Number.isFinite(t.lat))) {
+  if (
+    t.lat !== undefined &&
+    (typeof t.lat !== 'number' || !Number.isFinite(t.lat))
+  ) {
     return false;
   }
-  if (t.lon !== undefined && (typeof t.lon !== 'number' || !Number.isFinite(t.lon))) {
+  if (
+    t.lon !== undefined &&
+    (typeof t.lon !== 'number' || !Number.isFinite(t.lon))
+  ) {
     return false;
   }
   if (t.notificationIds !== undefined) {

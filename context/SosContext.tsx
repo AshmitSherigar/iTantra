@@ -45,6 +45,7 @@ import {
   stopSosKeeper,
 } from '../features/sos/keeper';
 import type { ReceivedSos, SosTimerState } from '../features/sos';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 /**
  * SOS engine. Mounted once at the root so the safety timer survives tab
@@ -68,9 +69,7 @@ function makeId(): string {
 }
 
 function senderName(): string {
-  return (
-    Device.deviceName?.trim() || Device.modelName?.trim() || 'VaaniSetu'
-  );
+  return Device.deviceName?.trim() || Device.modelName?.trim() || 'VaaniSetu';
 }
 
 type SosContextType = {
@@ -88,7 +87,10 @@ type SosContextType = {
   }) => Promise<void>;
   cancelTimer: () => Promise<void>;
   extendTimer: (extraMs: number) => Promise<void>;
-  sendManualSos: (helpMessage: string, includeLocation: boolean) => Promise<boolean>;
+  sendManualSos: (
+    helpMessage: string,
+    includeLocation: boolean,
+  ) => Promise<boolean>;
   retryPendingSos: () => Promise<boolean>;
   clearInbox: () => void;
   clearResult: () => void;
@@ -152,7 +154,9 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
               language: envelope.language,
               receivedAt: Date.now(),
               hops: hopsOf(envelope),
-              isAuto: envelope.sos?.isAuto ?? /missed check-in/i.test(envelope.message),
+              isAuto:
+                envelope.sos?.isAuto ??
+                /missed check-in/i.test(envelope.message),
             },
             ...current,
           ].slice(0, 30);
@@ -175,8 +179,6 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false;
     (async () => {
       try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
         const stored = await AsyncStorage.getItem('sos:siren-enabled-v1');
         if (!cancelled && stored !== null) {
           const on = stored === '1';
@@ -194,8 +196,6 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
     setSirenEnabledState(on);
     sirenEnabledRef.current = on;
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
       void AsyncStorage.setItem('sos:siren-enabled-v1', on ? '1' : '0');
     } catch {}
     if (!on) {
@@ -212,7 +212,17 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const floodSos = useCallback(
-    async (message: string, sosMeta: { startedAt: number; deadlineAt: number; isAuto: boolean; workspaceLabel?: string; lat?: number; lon?: number }): Promise<boolean> => {
+    async (
+      message: string,
+      sosMeta: {
+        startedAt: number;
+        deadlineAt: number;
+        isAuto: boolean;
+        workspaceLabel?: string;
+        lat?: number;
+        lon?: number;
+      },
+    ): Promise<boolean> => {
       const envelope = makeSosEnvelope({
         senderName: senderName(),
         message,
@@ -285,14 +295,21 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
           void playSosSiren();
         }
         if (ok) {
-          setLastResult(`🆘 SOS broadcasted at ${new Date().toLocaleTimeString()}. Nearby phones relay it further.`);
+          setLastResult(
+            `🆘 SOS broadcasted at ${new Date().toLocaleTimeString()}. Nearby phones relay it further.`,
+          );
           setPendingRetry(null);
           await saveLastFired({ at: Date.now(), message });
         } else {
-          setLastResult('SOS timer expired but no nearby phones were reachable after 3 tries. Keep the app open — tap Re-send when phones are near.');
+          setLastResult(
+            'SOS timer expired but no nearby phones were reachable after 3 tries. Keep the app open — tap Re-send when phones are near.',
+          );
           setPendingRetry({ message, at: Date.now() });
           await saveLastFired({ at: Date.now(), message });
-          await showImmediate('🆘 SOS not delivered', 'No nearby phones found. Tap Re-send in the SOS tab when phones are near.');
+          await showImmediate(
+            '🆘 SOS not delivered',
+            'No nearby phones found. Tap Re-send in the SOS tab when phones are near.',
+          );
         }
       } catch (e) {
         // Never let an expired timer persist: a stuck timer + keeper
@@ -312,7 +329,9 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
         setRemainingMs(0);
         if (message) {
           setPendingRetry({ message, at: Date.now() });
-          setLastResult('SOS timer expired but auto-send failed. Tap Re-send when phones are near.');
+          setLastResult(
+            'SOS timer expired but auto-send failed. Tap Re-send when phones are near.',
+          );
         } else {
           setLastResult('SOS timer expired.');
         }
@@ -546,8 +565,13 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
     await saveActiveTimer(next);
     setActiveTimer(next);
     setRemainingMs(deadlineAt - Date.now());
-    void startSosKeeper({ deadlineAt, workspaceLabel: next.workspaceLabel }).catch(() => {});
-    setLastResult(`Extended +${Math.round(extraMs / 60000)} min — new deadline ${new Date(deadlineAt).toLocaleTimeString()}.`);
+    void startSosKeeper({
+      deadlineAt,
+      workspaceLabel: next.workspaceLabel,
+    }).catch(() => {});
+    setLastResult(
+      `Extended +${Math.round(extraMs / 60000)} min — new deadline ${new Date(deadlineAt).toLocaleTimeString()}.`,
+    );
   }, []);
 
   const sendManualSos = useCallback(
@@ -583,11 +607,15 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
           lon,
         });
         if (ok) {
-          setLastResult(`🆘 SOS sent at ${new Date().toLocaleTimeString()}. Nearby phones relay it further.`);
+          setLastResult(
+            `🆘 SOS sent at ${new Date().toLocaleTimeString()}. Nearby phones relay it further.`,
+          );
           setPendingRetry(null);
           await saveLastFired({ at: now, message });
         } else {
-          setLastResult('No nearby phones reachable after 3 tries. Tap Re-send when phones are near.');
+          setLastResult(
+            'No nearby phones reachable after 3 tries. Tap Re-send when phones are near.',
+          );
           setPendingRetry({ message, at: now });
         }
         return ok;
@@ -613,7 +641,9 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
         setLastResult(`🆘 SOS re-sent at ${new Date().toLocaleTimeString()}.`);
         setPendingRetry(null);
       } else {
-        setLastResult('Still no nearby phones. Keep the app open and try Re-send again.');
+        setLastResult(
+          'Still no nearby phones. Keep the app open and try Re-send again.',
+        );
       }
       return ok;
     } finally {

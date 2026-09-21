@@ -29,7 +29,10 @@ async function checkDeadlineAndAlert(): Promise<boolean> {
   try {
     const raw = await AsyncStorage.getItem(ACTIVE_TIMER_KEY);
     if (!raw) return false;
-    const timer = JSON.parse(raw) as { deadlineAt?: number; workspaceLabel?: string };
+    const timer = JSON.parse(raw) as {
+      deadlineAt?: number;
+      workspaceLabel?: string;
+    };
     if (typeof timer?.deadlineAt !== 'number') return false;
     if (Date.now() < timer.deadlineAt) return false;
     // Expired while we were dead/backgrounded → shout via notification.
@@ -59,7 +62,11 @@ export function defineSosBackgroundTask(): void {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const BackgroundFetch = require('expo-background-fetch');
     void BackgroundFetch;
-    if (TaskManager?.hasStartedAsync && TaskManager?.isTaskDefined?.(SOS_BG_TASK)) return;
+    if (
+      TaskManager?.hasStartedAsync &&
+      TaskManager?.isTaskDefined?.(SOS_BG_TASK)
+    )
+      return;
     TaskManager.defineTask(SOS_BG_TASK, async () => {
       try {
         await checkDeadlineAndAlert();
@@ -84,7 +91,9 @@ export async function registerSosBackgroundTask(): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const TaskManager = require('expo-task-manager');
     defineSosBackgroundTask();
-    const registered = await TaskManager.isTaskRegisteredAsync(SOS_BG_TASK).catch(() => false);
+    const registered = await TaskManager.isTaskRegisteredAsync(
+      SOS_BG_TASK,
+    ).catch(() => false);
     if (!registered) {
       await BackgroundFetch.registerTaskAsync(SOS_BG_TASK, {
         minimumInterval: 15 * 60, // OS minimum ~15 min

@@ -14,7 +14,9 @@ export function extractMapUrl(message: string): string | null {
   const urls = extractUrls(message);
   if (urls.length === 0) return null;
   const maps = urls.find((u) =>
-    /maps\.google\.|google\.com\/maps|goo\.gl\/maps|openstreetmap\.org|geo:/i.test(u),
+    /maps\.google\.|google\.com\/maps|goo\.gl\/maps|openstreetmap\.org|geo:/i.test(
+      u,
+    ),
   );
   return maps ?? urls[0];
 }

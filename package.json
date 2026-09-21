@@ -12,6 +12,19 @@
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
+  "expo": {
+    "doctor": {
+      "reactNativeDirectoryCheck": {
+        "exclude": [
+          "react-native-background-actions",
+          "react-native-tcp-socket",
+          "react-native-udp",
+          "react-native-bluetooth-ble",
+          "react-native-sherpa-onnx"
+        ]
+      }
+    }
+  },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
     "@react-native-async-storage/async-storage": "2.2.0",

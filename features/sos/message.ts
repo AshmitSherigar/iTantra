@@ -9,7 +9,8 @@ export function buildSosHelpText(input: {
   startedAt: number;
   deadlineAt: number;
 }): string {
-  const help = (input.helpMessage ?? '').trim() || 'I need help. Please find me.';
+  const help =
+    (input.helpMessage ?? '').trim() || 'I need help. Please find me.';
   const when = new Date(input.deadlineAt).toLocaleTimeString();
   const mode = input.isAuto
     ? `Missed check-in at ${when} — timer expired`

@@ -45,9 +45,6 @@ yarn-error.*
 .idea/
 .vscode/
 
-# Audio
-*.wav
-
 # Models
 assets/models/
 *.onnx

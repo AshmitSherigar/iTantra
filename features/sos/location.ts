@@ -5,9 +5,7 @@ export type SosLocation = { lat: number; lon: number } | null;
  * returns null when permission denied, timed out, or expo-location
  * isn't available. SOS senders must NOT await this longer than ~6s.
  */
-export async function tryGetLocation(
-  timeoutMs = 6000,
-): Promise<SosLocation> {
+export async function tryGetLocation(timeoutMs = 6000): Promise<SosLocation> {
   try {
     // Lazy-require so the SOS tab still works on web / old builds
     // where expo-location isn't installed.
@@ -16,8 +14,12 @@ export async function tryGetLocation(
     const perms = await Location.requestForegroundPermissionsAsync();
     if (perms?.status !== 'granted') return null;
     const pos = await Promise.race([
-      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+      Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      }),
+      new Promise<null>((resolve) =>
+        setTimeout(() => resolve(null), timeoutMs),
+      ),
     ]);
     if (!pos?.coords) return null;
     const { latitude, longitude } = pos.coords;

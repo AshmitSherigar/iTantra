@@ -63,16 +63,27 @@ export async function scheduleAt(
   }
 }
 
-export async function cancelScheduled(ids: (string | null | undefined)[]): Promise<void> {
+export async function cancelScheduled(
+  ids: (string | null | undefined)[],
+): Promise<void> {
   try {
     if (!NotificationsRef) return;
     await Promise.all(
-      (ids ?? []).filter(Boolean).map((id) => NotificationsRef!.cancelScheduledNotificationAsync(id as string).catch(() => {})),
+      (ids ?? [])
+        .filter(Boolean)
+        .map((id) =>
+          NotificationsRef!
+            .cancelScheduledNotificationAsync(id as string)
+            .catch(() => {}),
+        ),
     );
   } catch {}
 }
 
-export async function showImmediate(title: string, body: string): Promise<void> {
+export async function showImmediate(
+  title: string,
+  body: string,
+): Promise<void> {
   try {
     if (!NotificationsRef) return;
     await NotificationsRef.scheduleNotificationAsync({

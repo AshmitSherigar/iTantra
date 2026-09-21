@@ -34,9 +34,7 @@ module.exports = function withSosForegroundService(config) {
     app.service = app.service ?? [];
 
     let svc = app.service.find((entry) =>
-      (entry?.$?.['android:name'] ?? '').endsWith(
-        'RNBackgroundActionsTask',
-      ),
+      (entry?.$?.['android:name'] ?? '').endsWith('RNBackgroundActionsTask'),
     );
     if (!svc) {
       svc = {
@@ -60,9 +58,7 @@ module.exports = function withSosForegroundService(config) {
     svc.$['android:foregroundServiceType'] = current.join('|');
 
     svc.property = svc.property ?? [];
-    if (
-      !svc.property.some((p) => p?.$?.['android:name'] === PROPERTY_NAME)
-    ) {
+    if (!svc.property.some((p) => p?.$?.['android:name'] === PROPERTY_NAME)) {
       svc.property.push({
         $: { 'android:name': PROPERTY_NAME, 'android:value': PROPERTY_VALUE },
       });

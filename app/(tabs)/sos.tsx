@@ -60,13 +60,21 @@ export default function SosScreen() {
     return presetMinutes;
   }, [useCustom, customMinutes, presetMinutes]);
 
-  const canStart = !activeTimer && !isStarting && effectiveMinutes >= 1 && effectiveMinutes <= 24 * 60;
+  const canStart =
+    !activeTimer &&
+    !isStarting &&
+    effectiveMinutes >= 1 &&
+    effectiveMinutes <= 24 * 60;
 
   const progress = useMemo(() => {
     if (!activeTimer) return 0;
     const total = activeTimer.durationMs;
     // Guard NaN/corrupt values: an invalid width ("NaN%") crashes layout.
-    if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(remainingMs)) {
+    if (
+      !Number.isFinite(total) ||
+      total <= 0 ||
+      !Number.isFinite(remainingMs)
+    ) {
       return 0;
     }
     return Math.min(1, Math.max(0, 1 - remainingMs / total));
@@ -74,7 +82,11 @@ export default function SosScreen() {
 
   async function handleStartTimer() {
     if (!canStart) {
-      Alert.alert('Pick a duration', 'Choose a preset or enter custom minutes (1–1440).', [{ text: 'OK' }]);
+      Alert.alert(
+        'Pick a duration',
+        'Choose a preset or enter custom minutes (1–1440).',
+        [{ text: 'OK' }],
+      );
       return;
     }
     setIsStarting(true);
@@ -86,11 +98,15 @@ export default function SosScreen() {
         includeLocation,
       });
       try {
-        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        await Haptics.notificationAsync(
+          Haptics.NotificationFeedbackType.Success,
+        );
       } catch {}
     } catch (e) {
       console.warn('[SOS] start failed:', e);
-      Alert.alert('Could not start timer', 'Please try again.', [{ text: 'OK' }]);
+      Alert.alert('Could not start timer', 'Please try again.', [
+        { text: 'OK' },
+      ]);
     } finally {
       setIsStarting(false);
     }
@@ -114,7 +130,7 @@ export default function SosScreen() {
   function handleManualSos() {
     Alert.alert(
       'Send SOS now?',
-      'This broadcasts 🆘 SOS to ALL nearby VaaniSetu phones immediately (3 flood tries).',
+      'This broadcasts SOS to ALL nearby VaaniSetu phones immediately (3 flood tries).',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -123,7 +139,9 @@ export default function SosScreen() {
           onPress: () =>
             void (async () => {
               try {
-                await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+                await Haptics.notificationAsync(
+                  Haptics.NotificationFeedbackType.Warning,
+                );
               } catch {}
               await sendManualSos(helpMessage, includeLocation);
             })(),
@@ -144,8 +162,12 @@ export default function SosScreen() {
       >
         <View style={styles.header}>
           <View>
-            <Text style={[styles.overline, { color: colors.textSecondary }]}>Safety</Text>
-            <Text style={[styles.title, { color: colors.text }]}>SOS Timer</Text>
+            <Text style={[styles.overline, { color: colors.textSecondary }]}>
+              Safety
+            </Text>
+            <Text style={[styles.title, { color: colors.text }]}>
+              SOS Timer
+            </Text>
           </View>
           <View
             style={[
@@ -188,11 +210,17 @@ export default function SosScreen() {
               </Text>
             </View>
             <Text style={[styles.muted, { color: colors.textSecondary }]}>
-              Auto-SOS at {new Date(activeTimer.deadlineAt).toLocaleTimeString()}
-              {activeTimer.workspaceLabel ? ` • ${activeTimer.workspaceLabel}` : ''}
+              Auto-SOS at{' '}
+              {new Date(activeTimer.deadlineAt).toLocaleTimeString()}
+              {activeTimer.workspaceLabel
+                ? ` • ${activeTimer.workspaceLabel}`
+                : ''}
             </Text>
             {activeTimer.helpMessage ? (
-              <Text style={[styles.helpPreview, { color: colors.text }]} numberOfLines={3}>
+              <Text
+                style={[styles.helpPreview, { color: colors.text }]}
+                numberOfLines={3}
+              >
                 “{activeTimer.helpMessage}”
               </Text>
             ) : null}
@@ -200,7 +228,10 @@ export default function SosScreen() {
               <View
                 style={[
                   styles.progressFill,
-                  { width: `${Math.round(progress * 100)}%`, backgroundColor: colors.error },
+                  {
+                    width: `${Math.round(progress * 100)}%`,
+                    backgroundColor: colors.error,
+                  },
                 ]}
               />
             </View>
@@ -210,27 +241,40 @@ export default function SosScreen() {
               activeOpacity={0.85}
             >
               <Ionicons name="checkmark-circle" size={20} color="#FFFFFF" />
-              <Text style={styles.safeButtonText}>I&apos;m Safe — Cancel SOS</Text>
+              <Text style={styles.safeButtonText}>
+                I&apos;m Safe — Cancel SOS
+              </Text>
             </TouchableOpacity>
             <View style={styles.extendRow}>
               <TouchableOpacity
-                style={[styles.extendButton, { backgroundColor: colors.inputBackground }]}
+                style={[
+                  styles.extendButton,
+                  { backgroundColor: colors.inputBackground },
+                ]}
                 onPress={() => void extendTimer(15 * 60 * 1000)}
                 activeOpacity={0.8}
               >
-                <Text style={[styles.extendText, { color: colors.text }]}>+15 min</Text>
+                <Text style={[styles.extendText, { color: colors.text }]}>
+                  +15 min
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.extendButton, { backgroundColor: colors.inputBackground }]}
+                style={[
+                  styles.extendButton,
+                  { backgroundColor: colors.inputBackground },
+                ]}
                 onPress={() => void extendTimer(60 * 60 * 1000)}
                 activeOpacity={0.8}
               >
-                <Text style={[styles.extendText, { color: colors.text }]}>+1 hour</Text>
+                <Text style={[styles.extendText, { color: colors.text }]}>
+                  +1 hour
+                </Text>
               </TouchableOpacity>
             </View>
             <Text style={[styles.finePrint, { color: colors.textSecondary }]}>
-              Fires in background via the “SOS timer armed” notification — don’t swipe it away. If the
-              phone is force-stopped, opening the app fires any missed SOS instantly.
+              Fires in background via the “SOS timer armed” notification — don’t
+              swipe it away. If the phone is force-stopped, opening the app
+              fires any missed SOS instantly.
             </Text>
           </View>
         ) : (
@@ -240,12 +284,17 @@ export default function SosScreen() {
               { backgroundColor: colors.surface, borderColor: colors.border },
             ]}
           >
-            <Text style={[styles.cardTitle, { color: colors.text }]}>Arm a safety timer</Text>
+            <Text style={[styles.cardTitle, { color: colors.text }]}>
+              Arm a safety timer
+            </Text>
             <Text style={[styles.muted, { color: colors.textSecondary }]}>
-              Based on your workspace time. Miss the check-in and SOS auto-broadcasts to everyone nearby.
+              Based on your workspace time. Miss the check-in and SOS
+              auto-broadcasts to everyone nearby.
             </Text>
 
-            <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>DURATION</Text>
+            <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
+              DURATION
+            </Text>
             <View style={styles.presetRow}>
               {SOS_PRESETS.map((p) => {
                 const selected = !useCustom && presetMinutes === p.minutes;
@@ -255,7 +304,9 @@ export default function SosScreen() {
                     style={[
                       styles.preset,
                       {
-                        backgroundColor: selected ? colors.primary : colors.inputBackground,
+                        backgroundColor: selected
+                          ? colors.primary
+                          : colors.inputBackground,
                         borderColor: colors.border,
                       },
                     ]}
@@ -282,7 +333,9 @@ export default function SosScreen() {
                 style={[
                   styles.preset,
                   {
-                    backgroundColor: useCustom ? colors.primary : colors.inputBackground,
+                    backgroundColor: useCustom
+                      ? colors.primary
+                      : colors.inputBackground,
                     borderColor: colors.border,
                     flex: 0,
                     paddingHorizontal: 14,
@@ -291,7 +344,12 @@ export default function SosScreen() {
                 onPress={() => setUseCustom(true)}
                 activeOpacity={0.8}
               >
-                <Text style={[styles.presetText, { color: useCustom ? '#FFFFFF' : colors.text }]}>
+                <Text
+                  style={[
+                    styles.presetText,
+                    { color: useCustom ? '#FFFFFF' : colors.text },
+                  ]}
+                >
                   Custom
                 </Text>
               </TouchableOpacity>
@@ -306,21 +364,32 @@ export default function SosScreen() {
                 keyboardType="numeric"
                 style={[
                   styles.input,
-                  { backgroundColor: colors.inputBackground, color: colors.text, flex: 1 },
+                  {
+                    backgroundColor: colors.inputBackground,
+                    color: colors.text,
+                    flex: 1,
+                  },
                 ]}
               />
             </View>
 
-            <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>WORKSPACE LABEL (OPTIONAL)</Text>
+            <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
+              WORKSPACE LABEL (OPTIONAL)
+            </Text>
             <TextInput
               value={workspaceLabel}
               onChangeText={(t) => setWorkspaceLabel(t.slice(0, 60))}
               placeholder="e.g. Night shift • Warehouse B"
               placeholderTextColor={colors.textSecondary}
-              style={[styles.input, { backgroundColor: colors.inputBackground, color: colors.text }]}
+              style={[
+                styles.input,
+                { backgroundColor: colors.inputBackground, color: colors.text },
+              ]}
             />
 
-            <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>HELP MESSAGE</Text>
+            <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
+              HELP MESSAGE
+            </Text>
             <TextInput
               value={helpMessage}
               onChangeText={(t) => setHelpMessage(t.slice(0, 280))}
@@ -329,7 +398,12 @@ export default function SosScreen() {
               multiline
               style={[
                 styles.input,
-                { backgroundColor: colors.inputBackground, color: colors.text, minHeight: 64, textAlignVertical: 'top' },
+                {
+                  backgroundColor: colors.inputBackground,
+                  color: colors.text,
+                  minHeight: 64,
+                  textAlignVertical: 'top',
+                },
               ]}
             />
 
@@ -340,7 +414,9 @@ export default function SosScreen() {
                 color={includeLocation ? colors.primary : colors.textSecondary}
               />
               <View style={{ flex: 1 }}>
-                <Text style={[styles.locationTitle, { color: colors.text }]}>Include location</Text>
+                <Text style={[styles.locationTitle, { color: colors.text }]}>
+                  Include location
+                </Text>
                 <Text style={[styles.muted, { color: colors.textSecondary }]}>
                   GPS lat/lon + maps link in the SOS, when available
                 </Text>
@@ -355,7 +431,12 @@ export default function SosScreen() {
             <TouchableOpacity
               style={[
                 styles.startButton,
-                { backgroundColor: canStart ? colors.primary : colors.inputBackground, opacity: isStarting ? 0.7 : 1 },
+                {
+                  backgroundColor: canStart
+                    ? colors.primary
+                    : colors.inputBackground,
+                  opacity: isStarting ? 0.7 : 1,
+                },
               ]}
               onPress={handleStartTimer}
               disabled={!canStart}
@@ -376,7 +457,9 @@ export default function SosScreen() {
                   { color: canStart ? '#FFFFFF' : colors.textSecondary },
                 ]}
               >
-                {isStarting ? 'Arming…' : `Start ${effectiveMinutes > 0 ? `${effectiveMinutes}m ` : ''}timer`}
+                {isStarting
+                  ? 'Arming…'
+                  : `Start ${effectiveMinutes > 0 ? `${effectiveMinutes}m ` : ''}timer`}
               </Text>
             </TouchableOpacity>
           </View>
@@ -384,7 +467,10 @@ export default function SosScreen() {
 
         {/* Manual SOS */}
         <TouchableOpacity
-          style={[styles.sosButton, { backgroundColor: colors.error, opacity: isFiring ? 0.7 : 1 }]}
+          style={[
+            styles.sosButton,
+            { backgroundColor: colors.error, opacity: isFiring ? 0.7 : 1 },
+          ]}
           onPress={handleManualSos}
           disabled={isFiring}
           activeOpacity={0.85}
@@ -398,7 +484,12 @@ export default function SosScreen() {
             {isFiring ? 'Sending…' : 'SEND SOS NOW'}
           </Text>
         </TouchableOpacity>
-        <Text style={[styles.finePrint, { color: colors.textSecondary, textAlign: 'center' }]}>
+        <Text
+          style={[
+            styles.finePrint,
+            { color: colors.textSecondary, textAlign: 'center' },
+          ]}
+        >
           Manual SOS floods to all nearby phones immediately (3 tries).
         </Text>
 
@@ -416,7 +507,13 @@ export default function SosScreen() {
             <Ionicons
               name={sirenEnabled ? 'megaphone' : 'megaphone-outline'}
               size={18}
-              color={sirenPlaying ? colors.error : sirenEnabled ? colors.primary : colors.textSecondary}
+              color={
+                sirenPlaying
+                  ? colors.error
+                  : sirenEnabled
+                    ? colors.primary
+                    : colors.textSecondary
+              }
             />
             <View style={{ flex: 1 }}>
               <Text style={[styles.locationTitle, { color: colors.text }]}>
@@ -434,22 +531,37 @@ export default function SosScreen() {
           </View>
           <View style={styles.extendRow}>
             <TouchableOpacity
-              style={[styles.extendButton, { backgroundColor: colors.inputBackground }]}
+              style={[
+                styles.extendButton,
+                { backgroundColor: colors.inputBackground },
+              ]}
               onPress={() => void testSiren()}
               activeOpacity={0.8}
             >
-              <Text style={[styles.extendText, { color: colors.text }]}>Test siren</Text>
+              <Text style={[styles.extendText, { color: colors.text }]}>
+                Test siren
+              </Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[
                 styles.extendButton,
-                { backgroundColor: sirenPlaying ? colors.error : colors.inputBackground, opacity: sirenPlaying ? 1 : 0.5 },
+                {
+                  backgroundColor: sirenPlaying
+                    ? colors.error
+                    : colors.inputBackground,
+                  opacity: sirenPlaying ? 1 : 0.5,
+                },
               ]}
               onPress={() => void stopSiren()}
               disabled={!sirenPlaying}
               activeOpacity={0.8}
             >
-              <Text style={[styles.extendText, { color: sirenPlaying ? '#FFFFFF' : colors.text }]}>
+              <Text
+                style={[
+                  styles.extendText,
+                  { color: sirenPlaying ? '#FFFFFF' : colors.text },
+                ]}
+              >
                 Stop siren
               </Text>
             </TouchableOpacity>
@@ -457,16 +569,24 @@ export default function SosScreen() {
         </View>
 
         {lastResult ? (
-          <Text style={[styles.resultLine, { color: colors.textSecondary }]}>{lastResult}</Text>
+          <Text style={[styles.resultLine, { color: colors.textSecondary }]}>
+            {lastResult}
+          </Text>
         ) : null}
 
         {pendingRetry ? (
           <View
-            style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.warning }]}
+            style={[
+              styles.card,
+              { backgroundColor: colors.surface, borderColor: colors.warning },
+            ]}
           >
-            <Text style={[styles.cardTitle, { color: colors.text }]}>SOS not delivered</Text>
+            <Text style={[styles.cardTitle, { color: colors.text }]}>
+              SOS not delivered
+            </Text>
             <Text style={[styles.muted, { color: colors.textSecondary }]}>
-              No nearby phones were reachable. Keep the app open and re-send when phones are near.
+              No nearby phones were reachable. Keep the app open and re-send
+              when phones are near.
             </Text>
             <TouchableOpacity
               style={[styles.startButton, { backgroundColor: colors.warning }]}
@@ -474,7 +594,9 @@ export default function SosScreen() {
               activeOpacity={0.85}
             >
               <Ionicons name="refresh" size={18} color="#FFFFFF" />
-              <Text style={[styles.startButtonText, { color: '#FFFFFF' }]}>Re-send SOS</Text>
+              <Text style={[styles.startButtonText, { color: '#FFFFFF' }]}>
+                Re-send SOS
+              </Text>
             </TouchableOpacity>
           </View>
         ) : null}
@@ -485,8 +607,14 @@ export default function SosScreen() {
             Received SOS · {inbox.length}
           </Text>
           {inbox.length > 0 ? (
-            <TouchableOpacity onPress={clearInbox} hitSlop={10} activeOpacity={0.6}>
-              <Text style={[styles.clearText, { color: colors.primary }]}>Clear</Text>
+            <TouchableOpacity
+              onPress={clearInbox}
+              hitSlop={10}
+              activeOpacity={0.6}
+            >
+              <Text style={[styles.clearText, { color: colors.primary }]}>
+                Clear
+              </Text>
             </TouchableOpacity>
           ) : null}
         </View>
@@ -495,7 +623,12 @@ export default function SosScreen() {
             SOS broadcasts from nearby phones land here in red.
           </Text>
         ) : (
-          <View style={[styles.listCard, { backgroundColor: colors.surface, borderColor: colors.error }]}>
+          <View
+            style={[
+              styles.listCard,
+              { backgroundColor: colors.surface, borderColor: colors.error },
+            ]}
+          >
             {inbox.map((item, i) => {
               const mapUrl = extractMapUrl(item.message);
               return (
@@ -509,10 +642,18 @@ export default function SosScreen() {
                     },
                   ]}
                 >
-                  <Text style={[styles.messageMeta, { color: colors.error }]} numberOfLines={1}>
-                    🆘 {item.senderName} · {item.isAuto ? 'auto (missed check-in)' : 'manual'} ·{' '}
-                    {item.hops <= 0 ? 'direct' : item.hops === 1 ? '1 hop' : `${item.hops} hops`} ·{' '}
-                    {new Date(item.receivedAt).toLocaleTimeString()}
+                  <Text
+                    style={[styles.messageMeta, { color: colors.error }]}
+                    numberOfLines={1}
+                  >
+                    🆘 {item.senderName} ·{' '}
+                    {item.isAuto ? 'auto (missed check-in)' : 'manual'} ·{' '}
+                    {item.hops <= 0
+                      ? 'direct'
+                      : item.hops === 1
+                        ? '1 hop'
+                        : `${item.hops} hops`}{' '}
+                    · {new Date(item.receivedAt).toLocaleTimeString()}
                   </Text>
                   <LinkifiedMessage
                     message={item.message}
@@ -521,16 +662,30 @@ export default function SosScreen() {
                   />
                   {mapUrl ? (
                     <TouchableOpacity
-                      style={[styles.mapButton, { backgroundColor: colors.primaryMuted }]}
+                      style={[
+                        styles.mapButton,
+                        { backgroundColor: colors.primaryMuted },
+                      ]}
                       onPress={() =>
                         Linking.openURL(mapUrl).catch(() =>
-                          Alert.alert('Cannot open link', mapUrl, [{ text: 'OK' }]),
+                          Alert.alert('Cannot open link', mapUrl, [
+                            { text: 'OK' },
+                          ]),
                         )
                       }
                       activeOpacity={0.8}
                     >
-                      <Ionicons name="map-outline" size={16} color={colors.primary} />
-                      <Text style={[styles.mapButtonText, { color: colors.primary }]}>
+                      <Ionicons
+                        name="map-outline"
+                        size={16}
+                        color={colors.primary}
+                      />
+                      <Text
+                        style={[
+                          styles.mapButtonText,
+                          { color: colors.primary },
+                        ]}
+                      >
                         Open location in Maps
                       </Text>
                     </TouchableOpacity>
@@ -606,7 +761,11 @@ const styles = StyleSheet.create({
   },
   helpPreview: { marginTop: 8, fontSize: 14, fontStyle: 'italic' },
   timerTop: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  timerCountdown: { fontSize: 38, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  timerCountdown: {
+    fontSize: 38,
+    fontWeight: '800',
+    fontVariant: ['tabular-nums'],
+  },
   progressTrack: {
     marginTop: 10,
     height: 8,
@@ -624,7 +783,11 @@ const styles = StyleSheet.create({
     height: 52,
     borderRadius: Radius.round,
   },
-  safeButtonText: { color: '#FFFFFF', fontSize: FontSize.medium, fontWeight: '800' },
+  safeButtonText: {
+    color: '#FFFFFF',
+    fontSize: FontSize.medium,
+    fontWeight: '800',
+  },
   extendRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
   extendButton: {
     flex: 1,
@@ -659,9 +822,19 @@ const styles = StyleSheet.create({
     height: 60,
     borderRadius: Radius.round,
   },
-  sosButtonText: { color: '#FFFFFF', fontSize: 18, fontWeight: '800', letterSpacing: 0.5 },
+  sosButtonText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
   finePrint: { marginTop: 8, fontSize: 12, lineHeight: 17 },
-  resultLine: { marginTop: Spacing.sm, fontSize: 13, textAlign: 'center', lineHeight: 19 },
+  resultLine: {
+    marginTop: Spacing.sm,
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 19,
+  },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -670,7 +843,11 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.sm,
   },
   clearText: { fontSize: 13, fontWeight: '700' },
-  listCard: { borderRadius: Radius.lg, borderWidth: 1, paddingHorizontal: Spacing.md },
+  listCard: {
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    paddingHorizontal: Spacing.md,
+  },
   messageBlock: { paddingVertical: 11, gap: 4 },
   messageMeta: { fontSize: 11, fontWeight: '700' },
   messageText: { fontSize: 15, lineHeight: 21 },

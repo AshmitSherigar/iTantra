@@ -1,5 +1,11 @@
 import React, { useMemo } from 'react';
-import { Alert, Linking, Text, type StyleProp, type TextStyle } from 'react-native';
+import {
+  Alert,
+  Linking,
+  Text,
+  type StyleProp,
+  type TextStyle,
+} from 'react-native';
 
 const URL_RE = /(https?:\/\/[^\s)]+|geo:[^\s)]+)/g;
 
@@ -13,7 +19,11 @@ type Props = {
  * Renders broadcast text with every URL tappable (opens Maps/browser).
  * Long SOS messages stay readable — only the link portion is styled.
  */
-export default function LinkifiedMessage({ message, textStyle, linkColor }: Props) {
+export default function LinkifiedMessage({
+  message,
+  textStyle,
+  linkColor,
+}: Props) {
   const parts = useMemo(() => {
     const out: { key: string; text: string; url: string | null }[] = [];
     if (!message) return out;
@@ -24,7 +34,11 @@ export default function LinkifiedMessage({ message, textStyle, linkColor }: Prop
       const m = URL_RE.exec(message);
       if (!m) break;
       if (m.index > last) {
-        out.push({ key: `t${i++}`, text: message.slice(last, m.index), url: null });
+        out.push({
+          key: `t${i++}`,
+          text: message.slice(last, m.index),
+          url: null,
+        });
       }
       const raw = m[0].replace(/[.,;!?]+$/, '');
       out.push({ key: `l${i++}`, text: raw, url: raw });
@@ -61,7 +75,10 @@ export default function LinkifiedMessage({ message, textStyle, linkColor }: Prop
         p.url ? (
           <Text
             key={p.key}
-            style={{ color: linkColor ?? '#2563EB', textDecorationLine: 'underline' }}
+            style={{
+              color: linkColor ?? '#2563EB',
+              textDecorationLine: 'underline',
+            }}
             onPress={() => void openUrl(p.url as string)}
           >
             {p.text}

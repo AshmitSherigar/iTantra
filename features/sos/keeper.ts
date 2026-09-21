@@ -64,8 +64,7 @@ function hasKeeperNativeModule(): boolean {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { NativeModules } = require('react-native');
     const native = NativeModules?.RNBackgroundActions as
-      | { start?: unknown }
-      | undefined;
+      { start?: unknown } | undefined;
     return !!native && typeof native.start === 'function';
   } catch {
     return false;
@@ -235,7 +234,9 @@ async function doStartSosKeeper(input: {
     // Don't re-attempt a start that previously killed the process.
     // (The flag survives because the crash happens after JS resolves.)
     if (await wasLastKeeperStartFatal()) {
-      console.warn('[SOS] keeper skipped — previous start was fatal (safe mode)');
+      console.warn(
+        '[SOS] keeper skipped — previous start was fatal (safe mode)',
+      );
       return false;
     }
     // Record the attempt BEFORE native start: if the service config in

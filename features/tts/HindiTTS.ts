@@ -335,7 +335,8 @@ class HindiTTS implements ITTSService {
   }
 
   /** Speak whatever partial text is left in the stream buffer. */
-  finishStreamingUtterance(): void {    if (!this.engine || !this.status.isInitialized) {
+  finishStreamingUtterance(): void {
+    if (!this.engine || !this.status.isInitialized) {
       this.streamBuffer = '';
       return;
     }

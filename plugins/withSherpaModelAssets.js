@@ -6,7 +6,11 @@ module.exports = function withSherpaModelAssets(config) {
   return withDangerousMod(config, [
     'android',
     async (config) => {
-      const source = path.join(config.modRequest.projectRoot, 'assets', 'models');
+      const source = path.join(
+        config.modRequest.projectRoot,
+        'assets',
+        'models',
+      );
       const destination = path.join(
         config.modRequest.platformProjectRoot,
         'app',

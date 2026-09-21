@@ -44,7 +44,8 @@ export default function RootLayout() {
     return subscribeToBroadcasts((broadcast) => {
       const lang = broadcastLangLabel(broadcast.language);
       const hops = broadcastHopCount(broadcast);
-      const hopSuffix = hops > 0 ? ` — via ${hops} hop${hops === 1 ? '' : 's'}` : '';
+      const hopSuffix =
+        hops > 0 ? ` — via ${hops} hop${hops === 1 ? '' : 's'}` : '';
       if (isSosEnvelope(broadcast)) {
         try {
           Vibration.vibrate([0, 500, 250, 500]);
