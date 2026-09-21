@@ -300,7 +300,7 @@ export default function Index() {
             </Text>
           </View>
           <Pressable
-            onPress={() => router.push('/wifi-test')}
+            onPress={() => router.push('/(tabs)/wifi')}
             style={[styles.headerIcon, { backgroundColor: colors.surface }]}
           >
             <Ionicons name="wifi-outline" size={22} color={colors.primary} />

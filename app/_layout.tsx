@@ -55,14 +55,6 @@ export default function RootLayout() {
               headerShown: false,
             }}
           />
-
-          <Stack.Screen
-            name="wifi-test"
-            options={{
-              headerShown: false,
-            }}
-          />
-          
         </Stack>
       </LanguageProvider>
     </ThemeProvider>
