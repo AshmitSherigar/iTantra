@@ -69,6 +69,7 @@
       ],
       "expo-asset",
       "./plugins/withSherpaModelAssets",
+      "./plugins/withSherpaProguardRules",
       "./plugins/withSosForegroundService",
       "./plugins/withAndroidAppSize",
       [
