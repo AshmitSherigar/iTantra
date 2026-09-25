@@ -54,7 +54,7 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
         if (!cancelled && isValidId(stored)) {
           setSelectedId(stored);
         }
-        // Anything else (null / unknown) keeps the English default —
+        // Anything else (null / unknown) keeps the English default -
         // and persists it so next launch is instant.
         if (!cancelled && !isValidId(stored)) {
           try {
@@ -62,7 +62,7 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
           } catch {}
         }
       } catch {
-        // Storage failure → stay on English default.
+        // Storage failure -> stay on English default.
       } finally {
         if (!cancelled) setIsLoaded(true);
       }

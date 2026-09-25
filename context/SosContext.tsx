@@ -200,9 +200,7 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
       const Notifications = require('expo-notifications');
       sub = Notifications.addNotificationResponseReceivedListener?.(
         (response: { actionIdentifier?: string }) => {
-          if (
-            response?.actionIdentifier === SOS_STOP_SIREN_ACTION_ID
-          ) {
+          if (response?.actionIdentifier === SOS_STOP_SIREN_ACTION_ID) {
             void stopSosSiren();
           }
         },
@@ -330,7 +328,7 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
         await stopSosKeeper().catch(() => {});
         setActiveTimer(null);
         setRemainingMs(0);
-        // Sound the siren on the sender's phone too — a missed check-in
+        // Sound the siren on the sender's phone too - a missed check-in
         // means the user may be incapacitated nearby; noise draws rescuers.
         if (sirenEnabledRef.current) {
           void playSosSiren();
@@ -343,7 +341,7 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
           await saveLastFired({ at: Date.now(), message });
         } else {
           setLastResult(
-            'SOS timer expired but no nearby phones were reachable after 3 tries. Keep the app open — tap Re-send when phones are near.',
+            'SOS timer expired but no nearby phones were reachable after 3 tries. Keep the app open - tap Re-send when phones are near.',
           );
           setPendingRetry({ message, at: Date.now() });
           await saveLastFired({ at: Date.now(), message });
@@ -413,7 +411,7 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
       }
       if (cancelled || !stored) return;
       if (Date.now() >= stored.deadlineAt) {
-        // Expired while dead → fire immediately on launch.
+        // Expired while dead -> fire immediately on launch.
         // fireExpiredTimer always clears the timer, even on failure, so a
         // broken fire path can never wedge the app into a crash loop.
         try {
@@ -429,7 +427,7 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
       setActiveTimer(stored);
       setRemainingMs(stored.deadlineAt - Date.now());
       // Re-arm the keeper after a restart so background firing keeps
-      // working — BUT only when this install has already run it
+      // working - BUT only when this install has already run it
       // successfully and the last attempt wasn't fatal. A broken native
       // service config (e.g. stale android/ prebuild without the
       // specialUse declaration) crashes the process on start; auto
@@ -449,7 +447,7 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
             if (!knownGood || fatal) {
               if (fatal) {
                 setLastResult(
-                  'Background keeper unavailable on this build — timer still counts down while the app is open. Re-arm the timer after updating the app to restore background firing.',
+                  'Background keeper unavailable on this build - timer still counts down while the app is open. Re-arm the timer after updating the app to restore background firing.',
                 );
               }
               return;
@@ -462,7 +460,7 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
         })();
       }, 2000);
     })();
-    // Tapping the deadline notification re-opens the app — re-check expiry.
+    // Tapping the deadline notification re-opens the app - re-check expiry.
     // Also handles the "Stop siren" action as a fallback.
     let sub: { remove: () => void } | undefined;
     try {
@@ -576,8 +574,8 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
       }).catch(() => false);
       setLastResult(
         keeperOk
-          ? `Timer armed — SOS auto-sends at ${new Date(deadlineAt).toLocaleTimeString()} unless you tap I'm Safe. Keep the "SOS timer armed" notification.`
-          : `Timer armed — SOS auto-sends at ${new Date(deadlineAt).toLocaleTimeString()} unless you tap I'm Safe. (Background keeper unavailable — keep app open or tap the deadline notification.)`,
+          ? `Timer armed - SOS auto-sends at ${new Date(deadlineAt).toLocaleTimeString()} unless you tap I'm Safe. Keep the "SOS timer armed" notification.`
+          : `Timer armed - SOS auto-sends at ${new Date(deadlineAt).toLocaleTimeString()} unless you tap I'm Safe. (Background keeper unavailable - keep app open or tap the deadline notification.)`,
       );
       setPendingRetry(null);
     },
@@ -591,7 +589,7 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
     await clearActiveTimer();
     setActiveTimer(null);
     setRemainingMs(0);
-    setLastResult("You're safe — timer cancelled, no SOS sent.");
+    setLastResult("You're safe - timer cancelled, no SOS sent.");
   }, []);
 
   const extendTimer = useCallback(async (extraMs: number) => {
@@ -618,7 +616,7 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
       workspaceLabel: next.workspaceLabel,
     }).catch(() => {});
     setLastResult(
-      `Extended +${Math.round(extraMs / 60000)} min — new deadline ${new Date(deadlineAt).toLocaleTimeString()}.`,
+      `Extended +${Math.round(extraMs / 60000)} min - new deadline ${new Date(deadlineAt).toLocaleTimeString()}.`,
     );
   }, []);
 

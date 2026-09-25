@@ -1,38 +1,28 @@
-import { useRef, useState } from 'react';
-import { Ionicons } from '@expo/vector-icons';
+import { useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { Mic, Square } from 'lucide-react-native';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
 
-import { FontSize, Radius, Spacing } from '../constants/theme';
-
+import { Radius, Shadows, Typography } from '../constants/theme';
 import { useTheme } from '../context/ThemeContext';
 
 type RecordButtonProps = {
   isRecording: boolean;
-  /** While transcribing/sending — dims the button and ignores NEW presses. */
   disabled?: boolean;
-  /** Press-and-hold entry: start recording. */
   onPressIn: () => void;
-  /** Release entry: stop and transcribe into the transcript box. */
   onPressOut: () => void;
 };
 
 /**
- * Push-to-talk mic button, built on the responder system (not Pressable).
- *
- * Why: Pressable cancels the gesture (without a guaranteed `onPressOut`)
- * when `disabled` flips mid-hold or the finger slides past the retention
- * offset — both left the mic running with no owner on-device. Here the
- * release path is guaranteed:
- * - `onResponderRelease` fires even when the finger lifts OFF the button.
- * - `onResponderTerminate` (call, notification shade, system steal) is
- *   treated as a release too.
- * - `disabled` only gates NEW presses (`onStartShouldSetResponder`); an
- *   in-flight hold always keeps its release.
- * - `onResponderTerminationRequest` returns false so a stray gesture never
- *   steals the hold mid-sentence.
- *
- * Both release paths funnel into `onPressOut`, which is idempotent
- * (guarded by the holder's session ref), so double delivery is harmless.
+ * Premium push-to-talk mic - Electric Indigo idle, red LIVE state,
+ * spring press feedback + pulsing halo while recording.
+ * Responder-system hold logic preserved (guaranteed release path).
  */
 export default function RecordButton({
   isRecording,
@@ -40,10 +30,9 @@ export default function RecordButton({
   onPressIn,
   onPressOut,
 }: RecordButtonProps) {
-  const { colors } = useTheme() as any;
+  const { colors, isDark } = useTheme() as any;
   const [pressed, setPressed] = useState(false);
 
-  // Latest props for responder callbacks that span renders mid-gesture.
   const disabledRef = useRef(disabled);
   disabledRef.current = disabled;
   const pressInRef = useRef(onPressIn);
@@ -51,6 +40,32 @@ export default function RecordButton({
   const pressOutRef = useRef(onPressOut);
   pressOutRef.current = onPressOut;
   const activeRef = useRef(false);
+
+  const scale = useSharedValue(1);
+  const halo = useSharedValue(0);
+
+  useEffect(() => {
+    scale.value = withSpring(pressed || isRecording ? 0.94 : 1, {
+      damping: 13,
+      stiffness: 380,
+    });
+  }, [pressed, isRecording, scale]);
+
+  useEffect(() => {
+    if (isRecording) {
+      halo.value = withRepeat(withTiming(1, { duration: 1400 }), -1, true);
+    } else {
+      halo.value = withTiming(0, { duration: 200 });
+    }
+  }, [isRecording, halo]);
+
+  const buttonAnim = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+  const haloAnim = useAnimatedStyle(() => ({
+    opacity: 0.35 * (1 - halo.value * 0.6),
+    transform: [{ scale: 1 + halo.value * 0.28 }],
+  }));
 
   const handleGrant = () => {
     activeRef.current = true;
@@ -64,6 +79,8 @@ export default function RecordButton({
     setPressed(false);
     pressOutRef.current();
   };
+
+  const bg = isRecording ? '#EF4444' : colors.brand;
 
   return (
     <View style={styles.container}>
@@ -83,26 +100,50 @@ export default function RecordButton({
         onResponderTerminate={handleRelease}
         style={styles.touchTarget}
       >
-        <View
+        {isRecording ? (
+          <Animated.View
+            style={[styles.halo, { backgroundColor: bg }, haloAnim]}
+          />
+        ) : null}
+        <Animated.View
           style={[
             styles.button,
             {
-              backgroundColor: isRecording ? colors.error : colors.primary,
+              backgroundColor: bg,
               opacity: disabled && !isRecording ? 0.55 : 1,
             },
-            (pressed || isRecording) && styles.pressed,
+            isDark && !isRecording ? Shadows.glow : Shadows.floating,
+            isRecording && {
+              shadowColor: '#EF4444',
+              shadowOffset: { width: 0, height: 8 },
+              shadowOpacity: 0.4,
+              shadowRadius: 20,
+              elevation: 8,
+            },
+            buttonAnim,
           ]}
         >
-          <Ionicons
-            name={isRecording ? 'stop' : 'mic'}
-            size={38}
-            color={colors.surface}
-          />
-        </View>
+          {isRecording ? (
+            <Square size={30} color="#FFFFFF" fill="#FFFFFF" />
+          ) : (
+            <Mic size={34} color="#FFFFFF" strokeWidth={2.2} />
+          )}
+        </Animated.View>
       </View>
 
-      <Text style={[styles.text, { color: colors.text }]}>
+      <Text
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        style={[styles.text, { color: colors.text }]}
+      >
         {isRecording ? 'Release to Stop' : 'Hold to Talk'}
+      </Text>
+      <Text
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        style={[styles.hint, { color: colors.textSecondary }]}
+      >
+        {isRecording ? 'Listening...' : 'Press & hold'}
       </Text>
     </View>
   );
@@ -111,34 +152,41 @@ export default function RecordButton({
 const styles = StyleSheet.create({
   container: {
     alignItems: 'center',
-    marginTop: Spacing.lg,
+    marginTop: 8,
   },
-
-  // Transparent grab area larger than the visible circle so edge touches
-  // and slight finger drift never lose the hold.
   touchTarget: {
-    padding: Spacing.md,
+    padding: 18,
     borderRadius: Radius.round,
     alignItems: 'center',
     justifyContent: 'center',
   },
-
+  halo: {
+    position: 'absolute',
+    width: 104,
+    height: 104,
+    borderRadius: 52,
+  },
   button: {
-    width: 90,
-    height: 90,
-    borderRadius: Radius.round,
+    width: 88,
+    height: 88,
+    borderRadius: 44,
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 3,
+    borderColor: 'rgba(255,255,255,0.35)',
   },
-
-  pressed: {
-    opacity: 0.7,
-    transform: [{ scale: 0.95 }],
-  },
-
   text: {
-    marginTop: Spacing.sm,
-    fontSize: FontSize.medium,
-    fontWeight: '600',
+    ...Typography.h3,
+    marginTop: 8,
+    textAlign: 'center' as const,
+    alignSelf: 'stretch' as const,
+    flexShrink: 1,
+  },
+  hint: {
+    ...Typography.caption,
+    marginTop: 2,
+    textAlign: 'center' as const,
+    alignSelf: 'stretch' as const,
+    flexShrink: 1,
   },
 });

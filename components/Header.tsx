@@ -1,38 +1,41 @@
 import { StyleSheet, Text, View } from 'react-native';
+import { AudioLines } from 'lucide-react-native';
 
-import { FontSize, Spacing } from '../constants/theme';
+import { Radius, Typography } from '../constants/theme';
 import { useTheme } from '../context/ThemeContext';
 
+/** Premium app header - gradient mark + bold title + muted subtitle. */
 export default function Header() {
-  const theme = useTheme() as any;
-  const colors = theme.colors ?? { text: '#000000', textSecondary: '#666666' };
+  const { colors } = useTheme() as any;
 
   return (
     <View style={styles.container}>
-      <Text style={[styles.title, { color: colors.text }]}>
-        Low Latency STT
-      </Text>
-
-      <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-        Speech to Text
-      </Text>
+      <View style={styles.mark}>
+        <AudioLines size={20} color="#FFFFFF" strokeWidth={2.2} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={[Typography.h2, { color: colors.text }]}>VaaniSetu</Text>
+        <Text style={[Typography.caption, { color: colors.textSecondary }]}>
+          Offline voice + SOS
+        </Text>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
+    flexDirection: 'row',
     alignItems: 'center',
-    paddingTop: Spacing.md,
+    gap: 12,
+    paddingTop: 4,
   },
-
-  title: {
-    fontSize: FontSize.title,
-    fontWeight: 'bold',
-  },
-
-  subtitle: {
-    marginTop: Spacing.sm,
-    fontSize: FontSize.body,
+  mark: {
+    width: 42,
+    height: 42,
+    borderRadius: Radius.md,
+    backgroundColor: '#CF5C36',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

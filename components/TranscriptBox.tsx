@@ -1,17 +1,16 @@
 import { StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { FontSize, Radius, Spacing } from '../constants/theme';
-
+import { Radius, Shadows, Typography } from '../constants/theme';
 import { useTheme } from '../context/ThemeContext';
 
 type TranscriptBoxProps = {
   transcript: string;
-  /** When provided with `editable`, the box becomes an editable textbox. */
   onChangeText?: (text: string) => void;
   editable?: boolean;
   placeholder?: string;
 };
 
+/** Premium glass transcript card - 20px radius, fine border, micro-shadow. */
 export default function TranscriptBox({
   transcript,
   onChangeText,
@@ -27,15 +26,24 @@ export default function TranscriptBox({
     <View
       style={[
         styles.container,
+        Shadows.card,
         {
-          backgroundColor: colors.surface,
-          borderColor: colors.border,
+          backgroundColor: colors.card,
+          borderColor: colors.glassBorder,
         },
       ]}
     >
-      <Text style={[styles.label, { color: colors.textSecondary }]}>
-        TRANSCRIPT
-      </Text>
+      <View style={styles.labelRow}>
+        <Text style={[Typography.overline, { color: colors.textSecondary }]}>
+          Transcript
+        </Text>
+        <View
+          style={[
+            styles.dot,
+            { backgroundColor: hasTranscript ? colors.success : colors.border },
+          ]}
+        />
+      </View>
 
       {isEditable ? (
         <TextInput
@@ -43,13 +51,20 @@ export default function TranscriptBox({
           onChangeText={onChangeText}
           multiline
           textAlignVertical="top"
-          placeholder={placeholder ?? 'Your words appear here…'}
-          placeholderTextColor={colors.textSecondary}
+          placeholder={placeholder ?? 'Your words appear here...'}
+          placeholderTextColor={colors.textTertiary ?? colors.textSecondary}
           style={[styles.input, { color: colors.text }]}
         />
       ) : (
-        <Text style={[styles.text, { color: colors.text }]}>
-          {hasTranscript ? transcript : (placeholder ?? 'Your words appear here…')}
+        <Text
+          style={[
+            styles.text,
+            { color: hasTranscript ? colors.text : colors.textSecondary },
+          ]}
+        >
+          {hasTranscript
+            ? transcript
+            : (placeholder ?? 'Your words appear here...')}
         </Text>
       )}
     </View>
@@ -58,29 +73,31 @@ export default function TranscriptBox({
 
 const styles = StyleSheet.create({
   container: {
-    minHeight: 100,
-    marginTop: Spacing.lg,
-    padding: Spacing.lg,
+    minHeight: 132,
+    padding: 18,
     borderWidth: 1,
     borderRadius: Radius.lg,
   },
-
-  label: {
-    fontSize: FontSize.small,
-    fontWeight: '600',
-    marginBottom: Spacing.md,
-    letterSpacing: 1,
+  labelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
   },
-
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
   text: {
-    fontSize: FontSize.body,
-    lineHeight: 26,
+    ...Typography.body,
+    fontSize: 16,
+    lineHeight: 24,
   },
-
   input: {
-    minHeight: 80,
-    fontSize: FontSize.body,
-    lineHeight: 26,
+    minHeight: 88,
+    fontSize: 16,
+    lineHeight: 24,
     padding: 0,
     margin: 0,
   },
