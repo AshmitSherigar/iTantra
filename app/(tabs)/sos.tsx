@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -14,6 +14,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { useTheme } from '../../context/ThemeContext';
 import { useSos } from '../../context/SosContext';
@@ -51,6 +52,35 @@ export default function SosScreen() {
   const [helpMessage, setHelpMessage] = useState('');
   const [includeLocation, setIncludeLocation] = useState(true);
   const [isStarting, setIsStarting] = useState(false);
+
+  // Calm-moment prep: remember the SOS message setup so there's no typing
+  // during an emergency. Set once, reused every time.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem('sos:compose-v1');
+        if (!raw || cancelled) return;
+        const saved = JSON.parse(raw);
+        if (typeof saved.helpMessage === 'string')
+          setHelpMessage(saved.helpMessage.slice(0, 280));
+        if (typeof saved.workspaceLabel === 'string')
+          setWorkspaceLabel(saved.workspaceLabel.slice(0, 60));
+        if (typeof saved.includeLocation === 'boolean')
+          setIncludeLocation(saved.includeLocation);
+      } catch {}
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    AsyncStorage.setItem(
+      'sos:compose-v1',
+      JSON.stringify({ helpMessage, workspaceLabel, includeLocation }),
+    ).catch(() => {});
+  }, [helpMessage, workspaceLabel, includeLocation]);
 
   const effectiveMinutes = useMemo(() => {
     if (useCustom) {
@@ -165,6 +195,9 @@ export default function SosScreen() {
             <Text style={[styles.title, { color: colors.text }]}>
               SOS Timer
             </Text>
+            <Text style={[styles.muted, { color: colors.textSecondary }]}>
+              Miss check-in → SOS goes to nearby phones.
+            </Text>
           </View>
           <View
             style={[
@@ -236,6 +269,8 @@ export default function SosScreen() {
               style={[styles.safeButton, { backgroundColor: colors.success }]}
               onPress={handleSafe}
               activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="I am safe, cancel SOS timer"
             >
               <Ionicons name="checkmark-circle" size={20} color="#FFFFFF" />
               <Text style={styles.safeButtonText}>
@@ -268,6 +303,9 @@ export default function SosScreen() {
                 </Text>
               </TouchableOpacity>
             </View>
+            <Text style={[styles.finePrint, { color: colors.textSecondary }]}>
+              Keep the SOS notification — don&apos;t swipe it away.
+            </Text>
           </View>
         ) : (
           <View
@@ -277,7 +315,10 @@ export default function SosScreen() {
             ]}
           >
             <Text style={[styles.cardTitle, { color: colors.text }]}>
-              Arm timer
+              Safety timer
+            </Text>
+            <Text style={[styles.muted, { color: colors.textSecondary }]}>
+              Miss check-in → SOS auto-sends.
             </Text>
 
             <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
@@ -459,6 +500,9 @@ export default function SosScreen() {
           onPress={handleManualSos}
           disabled={isFiring}
           activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel="Send SOS now to all nearby phones"
+          accessibilityState={{ disabled: isFiring, busy: isFiring }}
         >
           {isFiring ? (
             <ActivityIndicator size="small" color="#FFFFFF" />
@@ -469,6 +513,14 @@ export default function SosScreen() {
             {isFiring ? 'Sending…' : 'SEND SOS NOW'}
           </Text>
         </TouchableOpacity>
+        <Text
+          style={[
+            styles.finePrint,
+            { color: colors.textSecondary, textAlign: 'center' },
+          ]}
+        >
+          Sends now to all nearby phones.
+        </Text>
 
         {/* Siren & alerts — loops a loud siren on incoming SOS + on missed check-in */}
         <View
@@ -496,11 +548,15 @@ export default function SosScreen() {
               <Text style={[styles.locationTitle, { color: colors.text }]}>
                 SOS siren{sirenPlaying ? ' — SOUNDING' : ''}
               </Text>
+              <Text style={[styles.muted, { color: colors.textSecondary }]}>
+                Sounds on incoming SOS.
+              </Text>
             </View>
             <Switch
               value={sirenEnabled}
               onValueChange={setSirenEnabled}
               trackColor={{ true: colors.primary, false: colors.border }}
+              accessibilityLabel="SOS siren"
             />
           </View>
           <View style={styles.extendRow}>
@@ -592,7 +648,11 @@ export default function SosScreen() {
             </TouchableOpacity>
           ) : null}
         </View>
-        {inbox.length === 0 ? null : (
+        {inbox.length === 0 ? (
+          <Text style={[styles.muted, { color: colors.textSecondary }]}>
+            SOS replies appear here in red.
+          </Text>
+        ) : (
           <View
             style={[
               styles.listCard,

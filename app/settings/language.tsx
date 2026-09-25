@@ -43,11 +43,9 @@ export default function LanguageScreen() {
         <Text style={[styles.heading, { color: colors.text }]}>
           Language
         </Text>
-        {!isLoaded ? (
-          <Text style={[styles.subheading, { color: colors.textSecondary }]}>
-            Loading…
-          </Text>
-        ) : null}
+        <Text style={[styles.subheading, { color: colors.textSecondary }]}>
+          {!isLoaded ? 'Loading…' : 'Voice uses the selected language.'}
+        </Text>
 
         {SUPPORTED_LANGUAGES.map((language) => {
           const installed = isLanguageInstalled(language);
