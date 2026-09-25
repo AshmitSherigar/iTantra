@@ -275,6 +275,14 @@ export default function BluetoothScreen() {
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.section}>
+            <Text
+              style={[
+                styles.sectionDescription,
+                { color: colors.textSecondary },
+              ]}
+            >
+              Start Bluetooth so nearby phones can find you.
+            </Text>
             <Text style={[styles.nameLabel, { color: colors.textSecondary }]}>
               DEVICE NAME
             </Text>
@@ -364,6 +372,14 @@ export default function BluetoothScreen() {
           <View style={styles.section}>
             <Text style={[styles.sectionTitle, { color: colors.text }]}>
               Language
+            </Text>
+            <Text
+              style={[
+                styles.sectionDescription,
+                { color: colors.textSecondary },
+              ]}
+            >
+              Voice uses this language.
             </Text>
             <View
               style={[
@@ -473,6 +489,14 @@ export default function BluetoothScreen() {
                 />
                 <Text style={[styles.emptyStateTitle, { color: colors.text }]}>
                   No devices
+                </Text>
+                <Text
+                  style={[
+                    styles.emptyStateText,
+                    { color: colors.textSecondary },
+                  ]}
+                >
+                  Open app on both phones, then Scan.
                 </Text>
               </View>
             ) : (
@@ -591,7 +615,16 @@ export default function BluetoothScreen() {
             contentContainerStyle={styles.messagesContent}
             keyboardShouldPersistTaps="handled"
           >
-            {messages.length === 0 ? null : (
+            {messages.length === 0 ? (
+              <Text
+                style={[
+                  styles.emptyChatText,
+                  { color: colors.textSecondary, textAlign: 'center' },
+                ]}
+              >
+                Say where you are — messages appear here.
+              </Text>
+            ) : (
               messages.map((chatMessage) => (
                 <View
                   key={chatMessage.id}
@@ -831,6 +864,11 @@ export default function BluetoothScreen() {
               onPress={handleVoiceToggle}
               disabled={isTranscribing}
               activeOpacity={0.82}
+              accessibilityRole="button"
+              accessibilityLabel={
+                isVoiceRecording ? 'Stop recording' : 'Record voice message'
+              }
+              accessibilityState={{ disabled: isTranscribing }}
             >
               {isTranscribing ? (
                 <ActivityIndicator size="small" color={colors.primary} />
@@ -856,6 +894,12 @@ export default function BluetoothScreen() {
               disabled={!message.trim() || isVoiceRecording || isTranscribing}
               onPress={sendMessage}
               activeOpacity={0.82}
+              accessibilityRole="button"
+              accessibilityLabel="Send message"
+              accessibilityState={{
+                disabled:
+                  !message.trim() || isVoiceRecording || isTranscribing,
+              }}
             >
               <Ionicons
                 name="send"

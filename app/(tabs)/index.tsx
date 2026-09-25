@@ -260,18 +260,9 @@ export default function Index() {
         // Read the just-published flood detail (counts are module-fresh here,
         // not the possibly-stale render state).
         const fresh = getMeshStatus();
-        if (sent && fresh.lastDelivered > 0) {
-          const partial = fresh.lastDelivered < fresh.lastAttempted;
-          Alert.alert(
-            partial
-              ? `Reached ${fresh.lastDelivered} of ${fresh.lastAttempted}`
-              : `Sent to ${fresh.lastDelivered}`,
-            partial
-              ? 'Some links were unreachable — the rest may still get it as nearby phones relay.'
-              : 'Every nearby VaaniSetu phone receives it and relays it further.',
-            [{ text: 'OK' }],
-          );
-        } else {
+        if (!(sent && fresh.lastDelivered > 0)) {
+          // Distress rule: success stays inline (result line below) with no
+          // blocking popup; only failure interrupts — nobody heard you.
           Alert.alert(
             'No nearby devices',
             'No nearby VaaniSetu phone was reachable. Keep Bluetooth + Location ON, keep the app open on both phones, and try again.',
@@ -515,7 +506,9 @@ export default function Index() {
     ? `Speaking${meshSpeech.spokenLangLabel ? ` • ${meshSpeech.spokenLangLabel}` : ''}…`
     : meshSpeech.isLoadingVoice
       ? 'Loading voice…'
-      : null;
+      : !meshSpeech.enabled
+        ? "Off — you won't hear replies."
+        : null;
 
   return (
     <SafeAreaView
@@ -531,7 +524,10 @@ export default function Index() {
         <View style={styles.header}>
           <View>
             <Text style={[styles.title, { color: colors.text }]}>
-              Speech to Text
+              Get Help
+            </Text>
+            <Text style={[styles.muted, { color: colors.textSecondary }]}>
+              Hold mic, speak, broadcast to nearby phones.
             </Text>
           </View>
           <View
@@ -567,13 +563,16 @@ export default function Index() {
           onChangeText={setTranscript}
           editable
           placeholder={
-            isRecording ? 'Listening…' : 'Hold mic to speak…'
+            isRecording ? 'Listening…' : 'Hold mic — say what + where…'
           }
         />
 
         <Pressable
           onPress={handleBroadcast}
           disabled={!canBroadcast}
+          accessibilityRole="button"
+          accessibilityLabel="Broadcast for help to nearby phones"
+          accessibilityState={{ disabled: !canBroadcast, busy: isBroadcasting }}
           style={({ pressed }) => [
             styles.broadcastButton,
             {
@@ -597,7 +596,7 @@ export default function Index() {
               { color: canBroadcast ? '#FFFFFF' : colors.textSecondary },
             ]}
           >
-            {isBroadcasting ? 'Sending…' : 'Broadcast to nearby'}
+            {isBroadcasting ? 'Sending…' : 'Broadcast for help'}
           </Text>
         </Pressable>
 
@@ -606,6 +605,19 @@ export default function Index() {
             {meshStatus.lastResult}
           </Text>
         ) : null}
+
+        <TouchableOpacity
+          onPress={() => router.push('/sos' as any)}
+          activeOpacity={0.6}
+          hitSlop={10}
+          accessibilityRole="button"
+          accessibilityLabel="Open SOS timer"
+          style={{ alignSelf: 'center', paddingVertical: 6 }}
+        >
+          <Text style={{ color: colors.error, fontSize: 13, fontWeight: '700' }}>
+            Need help now? Open SOS →
+          </Text>
+        </TouchableOpacity>
 
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
@@ -634,7 +646,11 @@ export default function Index() {
             </TouchableOpacity>
           </View>
 
-          {peers.length === 0 ? null : (
+          {peers.length === 0 ? (
+            <Text style={[styles.muted, { color: colors.textSecondary }]}>
+              {scanning ? 'Looking…' : 'No nearby phones — keep app open.'}
+            </Text>
+          ) : (
             <View
               style={[
                 styles.listCard,
@@ -754,7 +770,11 @@ export default function Index() {
             ) : null}
           </View>
 
-          {meshInbox.length === 0 ? null : (
+          {meshInbox.length === 0 ? (
+            <Text style={[styles.muted, { color: colors.textSecondary }]}>
+              Replies from nearby phones appear here.
+            </Text>
+          ) : (
             <View
               style={[
                 styles.listCard,
