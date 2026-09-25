@@ -41,12 +41,10 @@ export default function LanguageScreen() {
     >
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={[styles.heading, { color: colors.text }]}>
-          Select Language
+          Language
         </Text>
         <Text style={[styles.subheading, { color: colors.textSecondary }]}>
-          {!isLoaded
-            ? 'Loading…'
-            : 'English is selected by default. Only the selected language model loads during a chat to save memory.'}
+          {!isLoaded ? 'Loading…' : 'Voice uses the selected language.'}
         </Text>
 
         {SUPPORTED_LANGUAGES.map((language) => {

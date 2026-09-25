@@ -22,7 +22,6 @@ import { Spacing } from '../../constants/theme';
 import { styles } from './bluetooth.styles';
 
 import {
-  MAX_ADVERTISED_NAME_LEN,
   getDeviceDisplayName,
   promptInstallLanguage,
   useBleAdvertiser,
@@ -282,17 +281,15 @@ export default function BluetoothScreen() {
                 { color: colors.textSecondary },
               ]}
             >
-              Set the name other phones will see, then start Bluetooth to
-              advertise. Tap Start only once — tapping again changes your BLE
-              address and you appear as a duplicate.
+              Start Bluetooth so nearby phones can find you.
             </Text>
             <Text style={[styles.nameLabel, { color: colors.textSecondary }]}>
-              YOUR DEVICE NAME (max {MAX_ADVERTISED_NAME_LEN} chars for BLE)
+              DEVICE NAME
             </Text>
             <TextInput
               value={displayName}
               onChangeText={(t) => setDisplayName(t.slice(0, 20))}
-              placeholder={Device.modelName ?? 'e.g. Rahul'}
+              placeholder={Device.modelName ?? 'Name'}
               placeholderTextColor={colors.textSecondary}
               maxLength={20}
               style={[
@@ -382,8 +379,7 @@ export default function BluetoothScreen() {
                 { color: colors.textSecondary },
               ]}
             >
-              Voice models for the selected language load when a chat opens.
-              Only that language stays in memory.
+              Voice uses this language.
             </Text>
             <View
               style={[
@@ -439,8 +435,7 @@ export default function BluetoothScreen() {
                 <Text
                   style={[styles.deviceCount, { color: colors.textSecondary }]}
                 >
-                  {devices.length} app device{devices.length === 1 ? '' : 's'}{' '}
-                  found{isScanning ? ' • scanning…' : ''}
+                  {devices.length} found{isScanning ? ' • scanning…' : ''}
                 </Text>
               </View>
 
@@ -493,7 +488,7 @@ export default function BluetoothScreen() {
                   style={{ marginBottom: Spacing.sm }}
                 />
                 <Text style={[styles.emptyStateTitle, { color: colors.text }]}>
-                  No VaaniSetu devices found
+                  No devices
                 </Text>
                 <Text
                   style={[
@@ -501,8 +496,7 @@ export default function BluetoothScreen() {
                     { color: colors.textSecondary },
                   ]}
                 >
-                  Only phones running this app appear here. Ask the other phone
-                  to open the app (mesh runs in the background), then tap Scan.
+                  Open app on both phones, then Scan.
                 </Text>
               </View>
             ) : (
@@ -622,25 +616,14 @@ export default function BluetoothScreen() {
             keyboardShouldPersistTaps="handled"
           >
             {messages.length === 0 ? (
-              <View style={styles.emptyChat}>
-                <Ionicons
-                  name="chatbubbles-outline"
-                  size={48}
-                  color={colors.textSecondary}
-                  style={{ marginBottom: Spacing.sm }}
-                />
-                <Text style={[styles.emptyChatTitle, { color: colors.text }]}>
-                  Start the conversation
-                </Text>
-                <Text
-                  style={[
-                    styles.emptyChatText,
-                    { color: colors.textSecondary },
-                  ]}
-                >
-                  Messages from either device will appear here.
-                </Text>
-              </View>
+              <Text
+                style={[
+                  styles.emptyChatText,
+                  { color: colors.textSecondary, textAlign: 'center' },
+                ]}
+              >
+                Say where you are — messages appear here.
+              </Text>
             ) : (
               messages.map((chatMessage) => (
                 <View
@@ -881,6 +864,11 @@ export default function BluetoothScreen() {
               onPress={handleVoiceToggle}
               disabled={isTranscribing}
               activeOpacity={0.82}
+              accessibilityRole="button"
+              accessibilityLabel={
+                isVoiceRecording ? 'Stop recording' : 'Record voice message'
+              }
+              accessibilityState={{ disabled: isTranscribing }}
             >
               {isTranscribing ? (
                 <ActivityIndicator size="small" color={colors.primary} />
@@ -906,6 +894,12 @@ export default function BluetoothScreen() {
               disabled={!message.trim() || isVoiceRecording || isTranscribing}
               onPress={sendMessage}
               activeOpacity={0.82}
+              accessibilityRole="button"
+              accessibilityLabel="Send message"
+              accessibilityState={{
+                disabled:
+                  !message.trim() || isVoiceRecording || isTranscribing,
+              }}
             >
               <Ionicons
                 name="send"

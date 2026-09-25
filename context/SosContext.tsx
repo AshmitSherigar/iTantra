@@ -337,7 +337,7 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
         }
         if (ok) {
           setLastResult(
-            `🆘 SOS broadcasted at ${new Date().toLocaleTimeString()}. Nearby phones relay it further.`,
+            `🆘 SOS broadcasted at ${new Date().toLocaleTimeString()}. Nearby phones relay it further. Keep the app open.`,
           );
           setPendingRetry(null);
           await saveLastFired({ at: Date.now(), message });
@@ -656,7 +656,7 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
         });
         if (ok) {
           setLastResult(
-            `🆘 SOS sent at ${new Date().toLocaleTimeString()}. Nearby phones relay it further.`,
+            `🆘 SOS sent at ${new Date().toLocaleTimeString()}. Nearby phones relay it further. Keep the app open.`,
           );
           setPendingRetry(null);
           await saveLastFired({ at: now, message });
@@ -686,7 +686,9 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
         isAuto: true,
       });
       if (ok) {
-        setLastResult(`🆘 SOS re-sent at ${new Date().toLocaleTimeString()}.`);
+        setLastResult(
+          `🆘 SOS re-sent at ${new Date().toLocaleTimeString()}. Keep the app open.`,
+        );
         setPendingRetry(null);
       } else {
         setLastResult(

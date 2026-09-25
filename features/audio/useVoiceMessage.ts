@@ -5,6 +5,7 @@ import { Audio } from 'expo-av';
 import { createPcmLiveStream } from 'react-native-sherpa-onnx/audio';
 import type { PcmLiveStreamHandle } from 'react-native-sherpa-onnx/audio';
 import { sttEngine } from '../stt/stt-engine';
+import type { STTStatus } from '../stt/stt-engine';
 
 export type UseVoiceMessageReturn = {
   /** Whether the microphone is actively recording. */
@@ -23,6 +24,19 @@ export type UseVoiceMessageReturn = {
   sttError: string | null;
   /** Last successfully transcribed text (also returned by stopVoice). */
   lastTranscript: string;
+  /**
+   * Synchronous mic-activity check (native handle held OR start in flight).
+   * Use from push-to-talk release handlers: React state (`isRecording`)
+   * lags a render behind, so checking only state can miss a mic that is
+   * already opening and leave it stuck open.
+   */
+  isVoiceActive: () => boolean;
+  /**
+   * Silently tear down the mic without transcribing and without setting an
+   * error. For background/unmount safety stops. If a `startVoice()` is still
+   * in flight it shuts itself back down after `mic.start()` resolves.
+   */
+  abortVoice: () => Promise<void>;
   /** Start recording the user's voice. */
   startVoice: () => Promise<void>;
   /**
@@ -38,6 +52,13 @@ export type UseVoiceMessageReturn = {
   ensureSttReady: (modelPath?: string) => Promise<void>;
   /** Free STT native memory (call on BLE disconnect). */
   releaseStt: () => Promise<void>;
+  /**
+   * Synchronous snapshot of the native STT engine (no render lag).
+   * `ensureSttReady()` reports failure via state AND resolves normally, so
+   * callers that must branch on the outcome (push-to-talk) check this right
+   * after awaiting it instead of relying on `sttReady`/`sttError` state.
+   */
+  getSttStatus: () => STTStatus;
 };
 
 /**
@@ -65,6 +86,22 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
   // tap in that window would otherwise open a second native AudioRecord,
   // which hard-crashes the app on Android.
   const startingRef = useRef(false);
+  // Set by abortVoice(); consumed by the in-flight startVoice() so a hold
+  // released during mic warm-up still shuts the mic back down.
+  const abortRef = useRef(false);
+  // Cached mic grant. Re-requesting permission on EVERY hold can flash a
+  // system permission UI on some OEM skins even when already granted — that
+  // pauses the activity (AppState 'background') and used to kill PTT holds
+  // mid-warm-up. getPermissionsAsync() never shows UI, so it is always
+  // safe; requestPermissionsAsync() runs at most once until denied.
+  const micPermissionGrantedRef = useRef<boolean | null>(null);
+  // Mic lifecycle for the start/stop rendezvous: a release landing while
+  // `starting` asks for a stand-down (pendingStop) instead of racing the
+  // native AudioRecord open — the previous race stranded mics and produced
+  // phantom warm-up aborts on touch churn.
+  const micStateRef = useRef<'idle' | 'starting' | 'live'>('idle');
+  const startPromiseRef = useRef<Promise<void> | null>(null);
+  const pendingStopRef = useRef(false);
 
   const teardownMicListeners = useCallback(() => {
     removeDataListenerRef.current?.();
@@ -89,6 +126,8 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
     setSttError(s.lastError);
   }, []);
 
+  const getSttStatus = useCallback((): STTStatus => sttEngine.getStatus(), []);
+
   // Clean up on unmount
   useEffect(() => {
     return () => {
@@ -98,6 +137,9 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
       } catch {}
       const mic = micRef.current;
       micRef.current = null;
+      // Tell an in-flight startVoice() (if any) to shut back down instead
+      // of going live after unmount.
+      abortRef.current = true;
       mic?.stop().catch(() => {});
     };
   }, []);
@@ -149,24 +191,58 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
       return;
     }
     // No double-start: a second native AudioRecord while one is live
-    // hard-crashes Android (and a tap during the permission dialog would
-    // otherwise do exactly that).
+    // hard-crashes Android. If a previous launch is still warming up (e.g. a
+    // tap that was just aborted), wait for it to settle and then continue
+    // with THIS launch — returning early here strands push-to-talk holds
+    // whose finger is still down with no mic and no retry.
+    if (startingRef.current && !micRef.current) {
+      pushLog('[Mic] waiting for in-flight mic launch to settle…');
+      const deadline = Date.now() + 8000;
+      while (startingRef.current && Date.now() < deadline) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      }
+      pushLog('[Mic] previous launch settled — continuing');
+    }
     if (startingRef.current || micRef.current) {
       return;
     }
     startingRef.current = true;
+    abortRef.current = false;
+    pendingStopRef.current = false;
+    micStateRef.current = 'starting';
 
-    try {
+    // The launch runs as a tracked promise so a release landing mid-warm-up
+    // (stopVoice) can wait for it to settle instead of racing it.
+    const launch = (async () => {
       setError(null);
       audioChunksRef.current = [];
       totalSamplesRef.current = 0;
 
       // Staged markers: a native kill preserves already-flushed Metro logs,
       // so the LAST visible marker tells us exactly which call died.
-      pushLog('[Mic] step=permission-request');
-      // 1. Request microphone permissions
-      const { granted } = await Audio.requestPermissionsAsync();
-      pushLog(`[Mic] step=permission-result granted=${granted}`);
+      // NOTE: check silently first — requestPermissionsAsync() can flash
+      // system UI on some OEM skins (pausing the app), so it runs only when
+      // the grant isn't already known.
+      let granted = micPermissionGrantedRef.current;
+      if (granted !== true) {
+        try {
+          granted = (await Audio.getPermissionsAsync()).granted;
+        } catch {
+          granted = false;
+        }
+        if (granted !== true) {
+          pushLog('[Mic] step=permission-request');
+          try {
+            granted = (await Audio.requestPermissionsAsync()).granted;
+          } catch {
+            granted = false;
+          }
+        }
+        micPermissionGrantedRef.current = granted;
+        pushLog(`[Mic] step=permission-result granted=${granted}`);
+      } else {
+        pushLog('[Mic] step=permission-cached granted=true');
+      }
       if (!granted) {
         throw new Error('Microphone permission not granted.');
       }
@@ -211,27 +287,101 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
       pushLog('[Mic] step=native-start');
       await mic.start();
       pushLog('[Mic] step=native-started');
-      setIsRecording(true);
-      pushLog('[Mic] Recording started…');
+    })();
+    startPromiseRef.current = launch;
+
+    try {
+      await launch;
     } catch (err) {
       // Start failed — release everything so a later stop()/unmount never
       // calls native stop() on a stream that isn't running (also a native
       // crash vector) and a retry starts from a clean handle.
       teardownMicListeners();
       micRef.current = null;
+      micStateRef.current = 'idle';
+      pendingStopRef.current = false;
       const msg = err instanceof Error ? err.message : String(err);
       console.error('[useVoiceMessage] startVoice failed:', msg);
+      pushLog(`[Mic] launch failed: ${msg}`);
       setError(msg);
       setIsRecording(false);
+      return;
     } finally {
       startingRef.current = false;
+      startPromiseRef.current = null;
     }
+
+    // A release landed mid-warm-up and asked for a stand-down: shut the
+    // just-opened mic back down but KEEP captured chunks — the already
+    // waiting stopVoice() transcribes whatever arrived (possibly ~nothing
+    // for a sub-second hold, which yields the usual empty-speech error,
+    // never a stranded mic and never a phantom abort).
+    // (Assertion: micRef.current was narrowed to null by the launch guard
+    // above; at runtime it holds the just-opened mic or null.)
+    const openedMic = micRef.current as PcmLiveStreamHandle | null;
+    if (pendingStopRef.current) {
+      pendingStopRef.current = false;
+      pushLog('[Mic] launch handed to pending stop — shutting down');
+      teardownMicListeners();
+      micRef.current = null;
+      if (openedMic) {
+        try {
+          await openedMic.stop();
+        } catch (e) {
+          console.warn('[useVoiceMessage] pending-stop mic stop failed:', e);
+        }
+      }
+      micStateRef.current = 'idle';
+      setIsRecording(false);
+      return;
+    }
+
+    if (abortRef.current) {
+      // True cancel (backgrounded/unmounted) while warming up: shut straight
+      // back down with no owner and discard everything.
+      pushLog('[Mic] start aborted before first frame — shutting down');
+      teardownMicListeners();
+      micRef.current = null;
+      if (openedMic) {
+        try {
+          await openedMic.stop();
+        } catch (e) {
+          console.warn('[useVoiceMessage] aborted mic stop failed:', e);
+        }
+      }
+      audioChunksRef.current = [];
+      totalSamplesRef.current = 0;
+      micStateRef.current = 'idle';
+      setIsRecording(false);
+      return;
+    }
+
+    micStateRef.current = 'live';
+    setIsRecording(true);
+    pushLog('[Mic] Recording started…');
   }, [pushLog, teardownMicListeners]);
 
   const stopVoice = useCallback(async (): Promise<string | null> => {
     setError(null);
     setIsTranscribing(true);
     setIsRecording(false);
+
+    if (micStateRef.current === 'starting') {
+      // Released while the mic was still opening: ask the in-flight launch
+      // to stand down, wait for it to settle, then stop normally and
+      // transcribe whatever arrived. Sub-second holds legitimately yield
+      // ~nothing (usual empty-speech error) — never a stranded mic.
+      pushLog('[Mic] stop during warm-up — waiting for launch to settle…');
+      pendingStopRef.current = true;
+      const pending = startPromiseRef.current;
+      if (pending) {
+        try {
+          await pending;
+        } catch {
+          // Launch failure is handled inside startVoice; continue below.
+        }
+      }
+    }
 
     try {
       // 1. Stop mic capture (never let a native stop() rejection escape —
@@ -301,10 +451,45 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
       return null;
     } finally {
       setIsTranscribing(false);
+      micStateRef.current = 'idle';
+      pendingStopRef.current = false;
       audioChunksRef.current = [];
       totalSamplesRef.current = 0;
     }
   }, [pushLog, refreshSttState, teardownMicListeners]);
+
+  /**
+   * Synchronous mic-activity check for push-to-talk release handlers.
+   * `isRecording` state lags a render behind `mic.start()` resolving, so a
+   * release in that gap must still stop the mic.
+   */
+  const isVoiceActive = useCallback(
+    () => startingRef.current || micRef.current != null,
+    [],
+  );
+
+  /**
+   * Silent teardown: release the mic without transcribing and without
+   * setting an error. An in-flight `startVoice()` observes the abort flag
+   * and shuts itself back down after `mic.start()` resolves.
+   */
+  const abortVoice = useCallback(async () => {
+    abortRef.current = true;
+    teardownMicListeners();
+    const mic = micRef.current;
+    micRef.current = null;
+    if (mic) {
+      try {
+        await mic.stop();
+      } catch (e) {
+        console.warn('[useVoiceMessage] abort mic stop failed (ignored):', e);
+      }
+    }
+    audioChunksRef.current = [];
+    totalSamplesRef.current = 0;
+    micStateRef.current = 'idle';
+    setIsRecording(false);
+  }, [teardownMicListeners]);
 
   return {
     isRecording,
@@ -315,9 +500,12 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
     sttLoading,
     sttError,
     lastTranscript,
+    isVoiceActive,
+    abortVoice,
     startVoice,
     stopVoice,
     ensureSttReady,
     releaseStt,
+    getSttStatus,
   };
 }

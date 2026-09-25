@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -14,6 +15,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import * as Device from 'expo-device';
+import * as Haptics from 'expo-haptics';
+import { Audio } from 'expo-av';
 
 import RecordButton from '@/components/RecordButton';
 import TranscriptBox from '@/components/TranscriptBox';
@@ -87,6 +90,8 @@ export default function Index() {
     getMeshStatus(),
   );
   const [meshInbox, setMeshInbox] = useState<ReceivedMeshMessage[]>([]);
+  /** Mirror of pttHoldingRef for UI (warm-up indicator while mic opens). */
+  const [pttHolding, setPttHolding] = useState(false);
 
   const {
     isRecording,
@@ -98,6 +103,9 @@ export default function Index() {
     startVoice,
     stopVoice,
     ensureSttReady,
+    isVoiceActive,
+    abortVoice,
+    getSttStatus,
   } = useVoiceMessage();
 
   // Incoming mesh broadcasts are spoken in the SENDER's language (each
@@ -117,6 +125,23 @@ export default function Index() {
   }, [sttModelPath, languageInstalled, ensureSttReady]);
 
   useEffect(() => subscribeToMeshStatus(setMeshStatus), []);
+
+  // Ask for mic permission once, up front. A system permission dialog
+  // appearing MID-HOLD steals the touch (responder terminate) and the hold
+  // dies in warm-up — pre-requesting keeps the hold path dialog-free and
+  // makes the first hold fast.
+  useEffect(() => {
+    (async () => {
+      try {
+        const current = await Audio.getPermissionsAsync();
+        if (!current.granted) {
+          await Audio.requestPermissionsAsync();
+        }
+      } catch {
+        // Permission errors surface when the mic is actually used.
+      }
+    })();
+  }, []);
   useEffect(
     () =>
       subscribeToBroadcasts((envelope) => {
@@ -172,7 +197,7 @@ export default function Index() {
         ? 'error'
         : 'ready';
 
-  function promptInstallLanguage() {
+  const promptInstallLanguage = useCallback(() => {
     Alert.alert(
       'Language model not installed',
       `The "${selectedLanguage.label}" voice models aren't installed yet. Install it or switch to an installed language to use the microphone.`,
@@ -193,80 +218,280 @@ export default function Index() {
         },
       ],
     );
-  }
+  }, [selectedLanguage.label]);
 
-  async function handleRecording() {
-    if (isRecording) {
-      const text = await stopVoice();
-      if (text) {
-        setTranscript(text);
+  // Push-to-talk guards. Refs mirror state so press-in/out handlers (which
+  // can interleave with async mic start/stop) never act on stale closures.
+  // NOTE: release decisions use the synchronous `isVoiceActive()` (native
+  // handle held OR start in flight), never `isRecording` state alone — state
+  // lags a render behind `mic.start()`, and that gap used to strand the mic
+  // open when the finger lifted early.
+  const pttHoldingRef = useRef(false);
+  const pttTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Walkie-talkie max transmission: a hold can never wedge the mic open. */
+  const PTT_MAX_HOLD_MS = 60000;
+  const isRecordingRef = useRef(isRecording);
+  useEffect(() => {
+    isRecordingRef.current = isRecording;
+  }, [isRecording]);
+  const isBroadcastingRef = useRef(false);
+  useEffect(() => {
+    isBroadcastingRef.current = isBroadcasting;
+  }, [isBroadcasting]);
+  const isTranscribingRef = useRef(isTranscribing);
+  useEffect(() => {
+    isTranscribingRef.current = isTranscribing;
+  }, [isTranscribing]);
+
+  const clearPttTimeout = useCallback(() => {
+    if (pttTimeoutRef.current) {
+      clearTimeout(pttTimeoutRef.current);
+      pttTimeoutRef.current = null;
+    }
+  }, []);
+
+  const broadcastText = useCallback(
+    async (rawText: string) => {
+      const message = rawText.trim();
+      if (!message || isBroadcastingRef.current) return;
+
+      setIsBroadcasting(true);
+      const senderName =
+        Device.deviceName?.trim() || Device.modelName?.trim() || 'VaaniSetu';
+      try {
+        const sent = await sendNearbyBroadcast(
+          makeMeshEnvelope({
+            senderName,
+            message,
+            language: selectedLanguage.id,
+          }),
+        );
+        // Read the just-published flood detail (counts are module-fresh here,
+        // not the possibly-stale render state).
+        const fresh = getMeshStatus();
+        if (!(sent && fresh.lastDelivered > 0)) {
+          // Distress rule: success stays inline (result line below) with no
+          // blocking popup; only failure interrupts — nobody heard you.
+          Alert.alert(
+            'No nearby devices',
+            'No nearby VaaniSetu phone was reachable. Keep Bluetooth + Location ON, keep the app open on both phones, and try again.',
+            [{ text: 'OK' }],
+          );
+        }
+      } catch (error) {
+        console.warn('[Broadcast] send failed:', error);
+        Alert.alert(
+          'Broadcast failed',
+          'Bluetooth could not send this message. Check that Bluetooth is on and try again.',
+          [{ text: 'OK' }],
+        );
+      } finally {
+        setIsBroadcasting(false);
       }
+    },
+    [selectedLanguage.id],
+  );
+
+  /** Manual send for typed/edited text in the transcript box. */
+  const handleBroadcast = useCallback(async () => {
+    await broadcastText(transcript);
+  }, [broadcastText, transcript]);
+
+  // Shown once per session when the speech model itself is broken (not for
+  // ordinary "no speech detected" results, which stay as the red error line).
+  const modelAlertShownRef = useRef(false);
+  const showModelFailedAlert = useCallback((detail: string | null) => {
+    if (modelAlertShownRef.current) return;
+    modelAlertShownRef.current = true;
+    Alert.alert(
+      'Speech model failed to load',
+      detail
+        ? `The on-device speech model could not start:\n\n${detail}\n\nRebuild the app with the latest code and reinstall it, then try again.`
+        : 'The on-device speech model could not start. Rebuild the app with the latest code and reinstall it, then try again.',
+      [{ text: 'OK' }],
+    );
+  }, []);
+
+  /**
+   * Push-to-talk press-in: start capturing. Ignored while transcribing,
+   * sending, or when the language model isn't installed.
+   */
+  const handlePttPressIn = useCallback(async () => {
+    if (pttHoldingRef.current) return;
+    if (
+      isRecordingRef.current ||
+      isTranscribingRef.current ||
+      isBroadcastingRef.current ||
+      sttLoading
+    ) {
       return;
     }
-
-    if (isTranscribing || sttLoading) return;
-
     if (!languageInstalled || !sttModelPath) {
       promptInstallLanguage();
       return;
     }
-
+    pttHoldingRef.current = true;
+    setPttHolding(true);
+    // Walkie-talkie max-TX: force a normal release (stop + transcribe) even
+    // if the finger never lifts, so the mic can never wedge open.
+    clearPttTimeout();
+    pttTimeoutRef.current = setTimeout(() => {
+      pttTimeoutRef.current = null;
+      void handlePttPressOutRef.current();
+    }, PTT_MAX_HOLD_MS);
+    try {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(
+        () => {},
+      );
+    } catch {}
     // Stop mesh playback first so the mic doesn't pick up the speaker.
     try {
       meshSpeechRef.current.stop();
     } catch {}
     setTranscript('');
-    await ensureSttReady(sttModelPath);
-    await startVoice();
-  }
-
-  async function handleBroadcast() {
-    const message = transcript.trim();
-    if (!message || isBroadcasting) return;
-
-    setIsBroadcasting(true);
-    const senderName =
-      Device.deviceName?.trim() || Device.modelName?.trim() || 'VaaniSetu';
     try {
-      const sent = await sendNearbyBroadcast(
-        makeMeshEnvelope({
-          senderName,
-          message,
-          language: selectedLanguage.id,
-        }),
-      );
-      // Read the just-published flood detail (counts are module-fresh here,
-      // not the possibly-stale render state).
-      const fresh = getMeshStatus();
-      if (sent && fresh.lastDelivered > 0) {
-        const partial = fresh.lastDelivered < fresh.lastAttempted;
-        Alert.alert(
-          partial
-            ? `Reached ${fresh.lastDelivered} of ${fresh.lastAttempted}`
-            : `Sent to ${fresh.lastDelivered}`,
-          partial
-            ? 'Some links were unreachable — the rest may still get it as nearby phones relay.'
-            : 'Every nearby VaaniSetu phone receives it and relays it further.',
-          [{ text: 'OK' }],
-        );
-      } else {
-        Alert.alert(
-          'No nearby devices',
-          'No nearby VaaniSetu phone was reachable. Keep Bluetooth + Location ON, keep the app open on both phones, and try again.',
-          [{ text: 'OK' }],
-        );
-      }
-    } catch (error) {
-      console.warn('[Broadcast] send failed:', error);
-      Alert.alert(
-        'Broadcast failed',
-        'Bluetooth could not send this message. Check that Bluetooth is on and try again.',
-        [{ text: 'OK' }],
-      );
-    } finally {
-      setIsBroadcasting(false);
+      await ensureSttReady(sttModelPath);
+    } catch {
+      // Belt-and-braces: ensureSttReady reports via state, verify below.
     }
-  }
+    // NOTE: ensureSttReady() resolves normally even when the native load
+    // fails (failure lands in engine status), so verify synchronously —
+    // otherwise we'd open the mic with no working model and the hold would
+    // transcribe nothing.
+    const sttStatus = getSttStatus();
+    if (!sttStatus.isInitialized) {
+      pttHoldingRef.current = false;
+      setPttHolding(false);
+      clearPttTimeout();
+      showModelFailedAlert(sttStatus.lastError);
+      return;
+    }
+    modelAlertShownRef.current = false;
+    // The finger may have lifted while the model was loading — don't open
+    // the mic into a dead hold.
+    if (!pttHoldingRef.current) {
+      setPttHolding(false);
+      return;
+    }
+    await startVoice();
+  }, [
+    clearPttTimeout,
+    ensureSttReady,
+    getSttStatus,
+    languageInstalled,
+    promptInstallLanguage,
+    showModelFailedAlert,
+    startVoice,
+    sttLoading,
+    sttModelPath,
+  ]);
+
+  /**
+   * Push-to-talk release: stop and transcribe into the transcript box.
+   * Sending is always manual via the Broadcast button. Releases landing
+   * mid-warm-up are NOT fatal: stopVoice waits for the launch to settle and
+   * transcribes whatever arrived (possibly ~nothing, which yields the usual
+   * empty-speech error instead of a phantom abort). Empty results just stay
+   * in the box (error line explains why).
+   */
+  const handlePttPressOut = useCallback(async () => {
+    if (!pttHoldingRef.current) return;
+    pttHoldingRef.current = false;
+    setPttHolding(false);
+    clearPttTimeout();
+    if (!isVoiceActive()) return;
+    try {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(
+        () => {},
+      );
+    } catch {}
+    const text = await stopVoice();
+    if (!text) {
+      // Null = either the model is broken (init/transcribe threw) or just
+      // empty speech. Only the broken-model case gets an alert; empty speech
+      // stays as the red error line under the inbox.
+      const sttStatus = getSttStatus();
+      if (!sttStatus.isInitialized) {
+        showModelFailedAlert(sttStatus.lastError);
+      }
+      return;
+    }
+    setTranscript(text);
+  }, [
+    clearPttTimeout,
+    getSttStatus,
+    isVoiceActive,
+    showModelFailedAlert,
+    stopVoice,
+  ]);
+
+  // Latest release fn for the max-hold timer / AppState listener below.
+  const handlePttPressOutRef = useRef(handlePttPressOut);
+  useEffect(() => {
+    handlePttPressOutRef.current = handlePttPressOut;
+  }, [handlePttPressOut]);
+
+  /**
+   * Cancel path: drop the hold silently (app backgrounded past the grace
+   * period, unmount). A completed recording in progress is left to the
+   * normal release path.
+   */
+  const cancelPttHold = useCallback(async () => {
+    if (!pttHoldingRef.current) return;
+    pttHoldingRef.current = false;
+    setPttHolding(false);
+    clearPttTimeout();
+    if (isVoiceActive()) {
+      await abortVoice();
+    }
+  }, [abortVoice, clearPttTimeout, isVoiceActive]);
+
+  // Backgrounding mid-hold must never leave the mic live: no release event
+  // fires when the app loses focus, so cancel the hold here. NOTE: only
+  // 'background' cancels — 'inactive' is transient (permission dialogs,
+  // notification shade, app switcher) and the finger is usually still down,
+  // so killing the hold there strands otherwise-healthy holds.
+  //
+  // Even 'background' gets a short grace period: on some OEM skins the mic
+  // permission check itself flashes system UI that pauses the activity for
+  // a fraction of a second. A real backgrounding (home button, app switch)
+  // persists past the grace and still cancels; a flicker returns to active
+  // and the hold survives untouched.
+  const bgGraceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const APP_BACKGROUND_GRACE_MS = 2500;
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'background') {
+        if (bgGraceTimeoutRef.current) {
+          clearTimeout(bgGraceTimeoutRef.current);
+        }
+        bgGraceTimeoutRef.current = setTimeout(() => {
+          bgGraceTimeoutRef.current = null;
+          void cancelPttHold();
+        }, APP_BACKGROUND_GRACE_MS);
+      } else if (state === 'active') {
+        if (bgGraceTimeoutRef.current) {
+          clearTimeout(bgGraceTimeoutRef.current);
+          bgGraceTimeoutRef.current = null;
+        }
+      }
+    });
+    return () => {
+      sub.remove();
+      if (bgGraceTimeoutRef.current) {
+        clearTimeout(bgGraceTimeoutRef.current);
+        bgGraceTimeoutRef.current = null;
+      }
+      void cancelPttHold();
+      if (pttTimeoutRef.current) {
+        clearTimeout(pttTimeoutRef.current);
+        pttTimeoutRef.current = null;
+      }
+    };
+  }, [cancelPttHold]);
+
+  const pttDisabled =
+    !isRecording && (isTranscribing || sttLoading || isBroadcasting);
 
   const canBroadcast =
     transcript.trim().length > 0 &&
@@ -282,7 +507,7 @@ export default function Index() {
         ? `${selectedLanguage.label} • Model failed: ${sttError}`
         : sttReady
           ? `${selectedLanguage.label} • Speech model ready`
-          : `${selectedLanguage.label} • Tap mic to load model`;
+          : `${selectedLanguage.label} • Hold mic to load model`;
 
   const scanning = meshStatus.isScanning || isRefreshingPeers;
   const peers = meshStatus.peers;
@@ -290,9 +515,9 @@ export default function Index() {
     ? `Speaking${meshSpeech.spokenLangLabel ? ` • ${meshSpeech.spokenLangLabel}` : ''}…`
     : meshSpeech.isLoadingVoice
       ? 'Loading voice…'
-      : meshSpeech.enabled
-        ? 'Plays in the sender’s language'
-        : 'Off — messages arrive silently';
+      : !meshSpeech.enabled
+        ? "Off — you won't hear replies."
+        : null;
 
   return (
     <SafeAreaView
@@ -307,11 +532,11 @@ export default function Index() {
       >
         <View style={styles.header}>
           <View>
-            <Text style={[styles.overline, { color: colors.textSecondary }]}>
-              VaaniSetu mesh
-            </Text>
             <Text style={[styles.title, { color: colors.text }]}>
-              Speech to Text
+              Get Help
+            </Text>
+            <Text style={[styles.muted, { color: colors.textSecondary }]}>
+              Hold mic, speak, broadcast to nearby phones.
             </Text>
           </View>
           <View
@@ -347,15 +572,16 @@ export default function Index() {
           onChangeText={setTranscript}
           editable
           placeholder={
-            isRecording
-              ? 'Listening… speak now'
-              : `Tap the mic and speak in ${selectedLanguage.label}…`
+            isRecording ? 'Listening…' : 'Hold mic — say what + where…'
           }
         />
 
         <Pressable
           onPress={handleBroadcast}
           disabled={!canBroadcast}
+          accessibilityRole="button"
+          accessibilityLabel="Broadcast for help to nearby phones"
+          accessibilityState={{ disabled: !canBroadcast, busy: isBroadcasting }}
           style={({ pressed }) => [
             styles.broadcastButton,
             {
@@ -379,7 +605,7 @@ export default function Index() {
               { color: canBroadcast ? '#FFFFFF' : colors.textSecondary },
             ]}
           >
-            {isBroadcasting ? 'Sending…' : 'Broadcast to nearby'}
+            {isBroadcasting ? 'Sending…' : 'Broadcast for help'}
           </Text>
         </Pressable>
 
@@ -388,6 +614,19 @@ export default function Index() {
             {meshStatus.lastResult}
           </Text>
         ) : null}
+
+        <TouchableOpacity
+          onPress={() => router.push('/sos' as any)}
+          activeOpacity={0.6}
+          hitSlop={10}
+          accessibilityRole="button"
+          accessibilityLabel="Open SOS timer"
+          style={{ alignSelf: 'center', paddingVertical: 6 }}
+        >
+          <Text style={{ color: colors.error, fontSize: 13, fontWeight: '700' }}>
+            Need help now? Open SOS →
+          </Text>
+        </TouchableOpacity>
 
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
@@ -418,9 +657,7 @@ export default function Index() {
 
           {peers.length === 0 ? (
             <Text style={[styles.muted, { color: colors.textSecondary }]}>
-              {scanning
-                ? 'Looking for nearby phones…'
-                : 'No phones nearby yet. Tap refresh with the app open on both phones.'}
+              {scanning ? 'Looking…' : 'No nearby phones — keep app open.'}
             </Text>
           ) : (
             <View
@@ -495,12 +732,14 @@ export default function Index() {
                 <Text style={[styles.peerName, { color: colors.text }]}>
                   Hear incoming
                 </Text>
-                <Text
-                  style={[styles.peerMeta, { color: colors.textSecondary }]}
-                  numberOfLines={1}
-                >
-                  {voiceHint}
-                </Text>
+                {voiceHint ? (
+                  <Text
+                    style={[styles.peerMeta, { color: colors.textSecondary }]}
+                    numberOfLines={1}
+                  >
+                    {voiceHint}
+                  </Text>
+                ) : null}
               </View>
               <Switch
                 value={meshSpeech.enabled}
@@ -542,7 +781,7 @@ export default function Index() {
 
           {meshInbox.length === 0 ? (
             <Text style={[styles.muted, { color: colors.textSecondary }]}>
-              Broadcasts from nearby phones land here.
+              Replies from nearby phones appear here.
             </Text>
           ) : (
             <View
@@ -630,12 +869,23 @@ export default function Index() {
           numberOfLines={1}
         >
           {isRecording
-            ? `Listening in ${selectedLanguage.label}…`
-            : isTranscribing || sttLoading
-              ? 'Working…'
-              : 'Tap to speak'}
+            ? `Listening in ${selectedLanguage.label}… release to transcribe`
+            : pttHolding
+              ? 'Starting mic… keep holding'
+              : isTranscribing
+                ? 'Transcribing…'
+                : isBroadcasting
+                  ? 'Sending…'
+                  : sttLoading
+                    ? 'Working…'
+                    : 'Hold to talk'}
         </Text>
-        <RecordButton isRecording={isRecording} onPress={handleRecording} />
+        <RecordButton
+          isRecording={isRecording}
+          disabled={pttDisabled}
+          onPressIn={() => void handlePttPressIn()}
+          onPressOut={() => void handlePttPressOut()}
+        />
         <StatusIndicator status={status} />
       </View>
     </SafeAreaView>

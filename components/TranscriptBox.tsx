@@ -43,15 +43,13 @@ export default function TranscriptBox({
           onChangeText={onChangeText}
           multiline
           textAlignVertical="top"
-          placeholder={placeholder ?? 'Your transcript will appear here...'}
+          placeholder={placeholder ?? 'Your words appear here…'}
           placeholderTextColor={colors.textSecondary}
           style={[styles.input, { color: colors.text }]}
         />
       ) : (
         <Text style={[styles.text, { color: colors.text }]}>
-          {hasTranscript
-            ? transcript
-            : (placeholder ?? 'Your transcript will appear here...')}
+          {hasTranscript ? transcript : (placeholder ?? 'Your words appear here…')}
         </Text>
       )}
     </View>
