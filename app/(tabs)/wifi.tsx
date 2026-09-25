@@ -400,9 +400,11 @@ export default function WifiScreen() {
           <Text style={[styles.headerLabel, { color: colors.textSecondary }]}>
             VaaniSetu WiFi
           </Text>
-          <Text style={[{ fontSize: 12, color: colors.textSecondary }]}>
-            {ssid ? `WiFi: ${ssid}` : 'Same WiFi • no internet needed'}
-          </Text>
+          {ssid ? (
+            <Text style={[{ fontSize: 12, color: colors.textSecondary }]}>
+              WiFi: {ssid}
+            </Text>
+          ) : null}
         </View>
         <View
           style={[
@@ -434,24 +436,13 @@ export default function WifiScreen() {
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.section}>
-            <Text
-              style={[
-                styles.sectionDescription,
-                { color: colors.textSecondary },
-              ]}
-            >
-              All phones on the SAME WiFi network running this app appear below.
-              Tap Connect All to join every phone to the broadcast at once (new
-              phones auto-join too), or tap Chat on one phone for a private
-              1-to-1 like Bluetooth. No mobile data or internet is used.
-            </Text>
             <Text style={[styles.nameLabel, { color: colors.textSecondary }]}>
-              YOUR DEVICE NAME
+              DEVICE NAME
             </Text>
             <TextInput
               value={displayName}
               onChangeText={(t) => setDisplayName(t.slice(0, 32))}
-              placeholder={Device.modelName ?? 'e.g. Rahul'}
+              placeholder={Device.modelName ?? 'Name'}
               placeholderTextColor={colors.textSecondary}
               maxLength={32}
               style={[
@@ -503,16 +494,7 @@ export default function WifiScreen() {
 
           <View style={styles.section}>
             <Text style={[styles.sectionTitle, { color: colors.text }]}>
-              Broadcast to all ({connectedAddresses.length} connected)
-            </Text>
-            <Text
-              style={[
-                styles.sectionDescription,
-                { color: colors.textSecondary },
-              ]}
-            >
-              Default target is Everyone — sends to every connected WiFi phone
-              at once via WiFi. Incoming plays in the sender’s language.
+              Broadcast ({connectedAddresses.length})
             </Text>
             <View
               style={[
@@ -568,7 +550,7 @@ export default function WifiScreen() {
               <TextInput
                 value={broadcastInput}
                 onChangeText={setBroadcastInput}
-                placeholder="Broadcast to everyone on WiFi..."
+                placeholder="Broadcast…"
                 placeholderTextColor={colors.textSecondary}
                 style={[
                   styles.input,
@@ -748,16 +730,7 @@ export default function WifiScreen() {
                   style={{ marginBottom: Spacing.sm }}
                 />
                 <Text style={[styles.emptyStateTitle, { color: colors.text }]}>
-                  No WiFi phones found
-                </Text>
-                <Text
-                  style={[
-                    styles.emptyStateText,
-                    { color: colors.textSecondary },
-                  ]}
-                >
-                  Join the same WiFi on both phones, open this tab on both, tap
-                  Connect All, and wait a few seconds.
+                  No devices
                 </Text>
               </View>
             ) : (
@@ -833,18 +806,6 @@ export default function WifiScreen() {
               </View>
             )}
           </View>
-          <Text
-            style={[
-              {
-                color: colors.textSecondary,
-                fontSize: 11,
-                marginTop: 8,
-                textAlign: 'center',
-              },
-            ]}
-          >
-            WiFi chat is separate from Bluetooth — both stay available.
-          </Text>
         </ScrollView>
       ) : (
         /* ---------------- 1-to-1 CHAT WINDOW (Bluetooth-style) ---------- */
@@ -917,28 +878,7 @@ export default function WifiScreen() {
             contentContainerStyle={styles.messagesContent}
             keyboardShouldPersistTaps="handled"
           >
-            {chatMessages.length === 0 ? (
-              <View style={styles.emptyChat}>
-                <Ionicons
-                  name="chatbubbles-outline"
-                  size={48}
-                  color={colors.textSecondary}
-                  style={{ marginBottom: Spacing.sm }}
-                />
-                <Text style={[styles.emptyChatTitle, { color: colors.text }]}>
-                  Private WiFi chat
-                </Text>
-                <Text
-                  style={[
-                    styles.emptyChatText,
-                    { color: colors.textSecondary },
-                  ]}
-                >
-                  Messages here go only to {chatPeerName || 'this phone'} over
-                  WiFi — nothing uses the internet.
-                </Text>
-              </View>
-            ) : (
+            {chatMessages.length === 0 ? null : (
               chatMessages.map((chatMessage) => (
                 <View
                   key={chatMessage.id}

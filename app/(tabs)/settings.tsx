@@ -27,10 +27,6 @@ export default function SettingsScreen() {
       >
         <View style={styles.header}>
           <Text style={[styles.title, { color: colors.text }]}>Settings</Text>
-
-          <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-            Manage your app preferences
-          </Text>
         </View>
 
         <View style={styles.section}>
@@ -54,7 +50,7 @@ export default function SettingsScreen() {
                   { color: colors.textSecondary },
                 ]}
               >
-                {selectedLanguage.label} • Choose your preferred language
+                {selectedLanguage.label}
               </Text>
             </View>
 
@@ -71,15 +67,6 @@ export default function SettingsScreen() {
             <View style={styles.textContainer}>
               <Text style={[styles.settingTitle, { color: colors.text }]}>
                 Appearance
-              </Text>
-
-              <Text
-                style={[
-                  styles.settingDescription,
-                  { color: colors.textSecondary },
-                ]}
-              >
-                Customize how the app looks
               </Text>
             </View>
 
@@ -103,15 +90,6 @@ export default function SettingsScreen() {
               <Text style={[styles.settingTitle, { color: colors.text }]}>
                 About App
               </Text>
-
-              <Text
-                style={[
-                  styles.settingDescription,
-                  { color: colors.textSecondary },
-                ]}
-              >
-                Information about VaaniSetu
-              </Text>
             </View>
 
             <Text style={[styles.arrow, { color: colors.textSecondary }]}>
@@ -121,7 +99,7 @@ export default function SettingsScreen() {
         </View>
 
         <Text style={[styles.version, { color: colors.textSecondary }]}>
-          VaaniSetu • v1.0.0
+          v1.0.0
         </Text>
       </ScrollView>
     </SafeAreaView>

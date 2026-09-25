@@ -4,12 +4,7 @@ export default function AboutScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.content}>
-        <Text style={styles.appName}>Low-Latency STT</Text>
-
-        <Text style={styles.description}>
-          A low-latency speech-to-text mobile application built with React
-          Native and Expo.
-        </Text>
+        <Text style={styles.appName}>VaaniSetu</Text>
 
         <Text style={styles.version}>Version 1.0.0</Text>
       </View>

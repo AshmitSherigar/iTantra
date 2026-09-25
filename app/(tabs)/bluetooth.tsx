@@ -22,7 +22,6 @@ import { Spacing } from '../../constants/theme';
 import { styles } from './bluetooth.styles';
 
 import {
-  MAX_ADVERTISED_NAME_LEN,
   getDeviceDisplayName,
   promptInstallLanguage,
   useBleAdvertiser,
@@ -276,23 +275,13 @@ export default function BluetoothScreen() {
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.section}>
-            <Text
-              style={[
-                styles.sectionDescription,
-                { color: colors.textSecondary },
-              ]}
-            >
-              Set the name other phones will see, then start Bluetooth to
-              advertise. Tap Start only once — tapping again changes your BLE
-              address and you appear as a duplicate.
-            </Text>
             <Text style={[styles.nameLabel, { color: colors.textSecondary }]}>
-              YOUR DEVICE NAME (max {MAX_ADVERTISED_NAME_LEN} chars for BLE)
+              DEVICE NAME
             </Text>
             <TextInput
               value={displayName}
               onChangeText={(t) => setDisplayName(t.slice(0, 20))}
-              placeholder={Device.modelName ?? 'e.g. Rahul'}
+              placeholder={Device.modelName ?? 'Name'}
               placeholderTextColor={colors.textSecondary}
               maxLength={20}
               style={[
@@ -376,15 +365,6 @@ export default function BluetoothScreen() {
             <Text style={[styles.sectionTitle, { color: colors.text }]}>
               Language
             </Text>
-            <Text
-              style={[
-                styles.sectionDescription,
-                { color: colors.textSecondary },
-              ]}
-            >
-              Voice models for the selected language load when a chat opens.
-              Only that language stays in memory.
-            </Text>
             <View
               style={[
                 styles.deviceCard,
@@ -439,8 +419,7 @@ export default function BluetoothScreen() {
                 <Text
                   style={[styles.deviceCount, { color: colors.textSecondary }]}
                 >
-                  {devices.length} app device{devices.length === 1 ? '' : 's'}{' '}
-                  found{isScanning ? ' • scanning…' : ''}
+                  {devices.length} found{isScanning ? ' • scanning…' : ''}
                 </Text>
               </View>
 
@@ -493,16 +472,7 @@ export default function BluetoothScreen() {
                   style={{ marginBottom: Spacing.sm }}
                 />
                 <Text style={[styles.emptyStateTitle, { color: colors.text }]}>
-                  No VaaniSetu devices found
-                </Text>
-                <Text
-                  style={[
-                    styles.emptyStateText,
-                    { color: colors.textSecondary },
-                  ]}
-                >
-                  Only phones running this app appear here. Ask the other phone
-                  to open the app (mesh runs in the background), then tap Scan.
+                  No devices
                 </Text>
               </View>
             ) : (
@@ -621,27 +591,7 @@ export default function BluetoothScreen() {
             contentContainerStyle={styles.messagesContent}
             keyboardShouldPersistTaps="handled"
           >
-            {messages.length === 0 ? (
-              <View style={styles.emptyChat}>
-                <Ionicons
-                  name="chatbubbles-outline"
-                  size={48}
-                  color={colors.textSecondary}
-                  style={{ marginBottom: Spacing.sm }}
-                />
-                <Text style={[styles.emptyChatTitle, { color: colors.text }]}>
-                  Start the conversation
-                </Text>
-                <Text
-                  style={[
-                    styles.emptyChatText,
-                    { color: colors.textSecondary },
-                  ]}
-                >
-                  Messages from either device will appear here.
-                </Text>
-              </View>
-            ) : (
+            {messages.length === 0 ? null : (
               messages.map((chatMessage) => (
                 <View
                   key={chatMessage.id}

@@ -515,9 +515,7 @@ export default function Index() {
     ? `Speaking${meshSpeech.spokenLangLabel ? ` • ${meshSpeech.spokenLangLabel}` : ''}…`
     : meshSpeech.isLoadingVoice
       ? 'Loading voice…'
-      : meshSpeech.enabled
-        ? 'Plays in the sender’s language'
-        : 'Off — messages arrive silently';
+      : null;
 
   return (
     <SafeAreaView
@@ -532,9 +530,6 @@ export default function Index() {
       >
         <View style={styles.header}>
           <View>
-            <Text style={[styles.overline, { color: colors.textSecondary }]}>
-              VaaniSetu mesh
-            </Text>
             <Text style={[styles.title, { color: colors.text }]}>
               Speech to Text
             </Text>
@@ -572,9 +567,7 @@ export default function Index() {
           onChangeText={setTranscript}
           editable
           placeholder={
-            isRecording
-              ? 'Listening… release to transcribe'
-              : `Hold the mic and speak in ${selectedLanguage.label}, then tap Broadcast…`
+            isRecording ? 'Listening…' : 'Hold mic to speak…'
           }
         />
 
@@ -641,13 +634,7 @@ export default function Index() {
             </TouchableOpacity>
           </View>
 
-          {peers.length === 0 ? (
-            <Text style={[styles.muted, { color: colors.textSecondary }]}>
-              {scanning
-                ? 'Looking for nearby phones…'
-                : 'No phones nearby yet. Tap refresh with the app open on both phones.'}
-            </Text>
-          ) : (
+          {peers.length === 0 ? null : (
             <View
               style={[
                 styles.listCard,
@@ -720,12 +707,14 @@ export default function Index() {
                 <Text style={[styles.peerName, { color: colors.text }]}>
                   Hear incoming
                 </Text>
-                <Text
-                  style={[styles.peerMeta, { color: colors.textSecondary }]}
-                  numberOfLines={1}
-                >
-                  {voiceHint}
-                </Text>
+                {voiceHint ? (
+                  <Text
+                    style={[styles.peerMeta, { color: colors.textSecondary }]}
+                    numberOfLines={1}
+                  >
+                    {voiceHint}
+                  </Text>
+                ) : null}
               </View>
               <Switch
                 value={meshSpeech.enabled}
@@ -765,11 +754,7 @@ export default function Index() {
             ) : null}
           </View>
 
-          {meshInbox.length === 0 ? (
-            <Text style={[styles.muted, { color: colors.textSecondary }]}>
-              Broadcasts from nearby phones land here.
-            </Text>
-          ) : (
+          {meshInbox.length === 0 ? null : (
             <View
               style={[
                 styles.listCard,

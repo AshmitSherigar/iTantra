@@ -162,9 +162,6 @@ export default function SosScreen() {
       >
         <View style={styles.header}>
           <View>
-            <Text style={[styles.overline, { color: colors.textSecondary }]}>
-              Safety
-            </Text>
             <Text style={[styles.title, { color: colors.text }]}>
               SOS Timer
             </Text>
@@ -271,11 +268,6 @@ export default function SosScreen() {
                 </Text>
               </TouchableOpacity>
             </View>
-            <Text style={[styles.finePrint, { color: colors.textSecondary }]}>
-              Fires in background via the “SOS timer armed” notification — don’t
-              swipe it away. If the phone is force-stopped, opening the app
-              fires any missed SOS instantly.
-            </Text>
           </View>
         ) : (
           <View
@@ -285,11 +277,7 @@ export default function SosScreen() {
             ]}
           >
             <Text style={[styles.cardTitle, { color: colors.text }]}>
-              Arm a safety timer
-            </Text>
-            <Text style={[styles.muted, { color: colors.textSecondary }]}>
-              Based on your workspace time. Miss the check-in and SOS
-              auto-broadcasts to everyone nearby.
+              Arm timer
             </Text>
 
             <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
@@ -359,7 +347,7 @@ export default function SosScreen() {
                   setUseCustom(true);
                   setCustomMinutes(t.replace(/[^0-9]/g, '').slice(0, 4));
                 }}
-                placeholder="Minutes (1–1440)"
+                placeholder="Minutes"
                 placeholderTextColor={colors.textSecondary}
                 keyboardType="numeric"
                 style={[
@@ -379,7 +367,7 @@ export default function SosScreen() {
             <TextInput
               value={workspaceLabel}
               onChangeText={(t) => setWorkspaceLabel(t.slice(0, 60))}
-              placeholder="e.g. Night shift • Warehouse B"
+              placeholder="Label"
               placeholderTextColor={colors.textSecondary}
               style={[
                 styles.input,
@@ -393,7 +381,7 @@ export default function SosScreen() {
             <TextInput
               value={helpMessage}
               onChangeText={(t) => setHelpMessage(t.slice(0, 280))}
-              placeholder="e.g. I am near the back gate, need help"
+              placeholder="Help message"
               placeholderTextColor={colors.textSecondary}
               multiline
               style={[
@@ -416,9 +404,6 @@ export default function SosScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={[styles.locationTitle, { color: colors.text }]}>
                   Include location
-                </Text>
-                <Text style={[styles.muted, { color: colors.textSecondary }]}>
-                  GPS lat/lon + maps link in the SOS, when available
                 </Text>
               </View>
               <Switch
@@ -484,14 +469,6 @@ export default function SosScreen() {
             {isFiring ? 'Sending…' : 'SEND SOS NOW'}
           </Text>
         </TouchableOpacity>
-        <Text
-          style={[
-            styles.finePrint,
-            { color: colors.textSecondary, textAlign: 'center' },
-          ]}
-        >
-          Manual SOS floods to all nearby phones immediately (3 tries).
-        </Text>
 
         {/* Siren & alerts — loops a loud siren on incoming SOS + on missed check-in */}
         <View
@@ -518,9 +495,6 @@ export default function SosScreen() {
             <View style={{ flex: 1 }}>
               <Text style={[styles.locationTitle, { color: colors.text }]}>
                 SOS siren{sirenPlaying ? ' — SOUNDING' : ''}
-              </Text>
-              <Text style={[styles.muted, { color: colors.textSecondary }]}>
-                Loops on incoming SOS and on your missed check-in
               </Text>
             </View>
             <Switch
@@ -618,11 +592,7 @@ export default function SosScreen() {
             </TouchableOpacity>
           ) : null}
         </View>
-        {inbox.length === 0 ? (
-          <Text style={[styles.muted, { color: colors.textSecondary }]}>
-            SOS broadcasts from nearby phones land here in red.
-          </Text>
-        ) : (
+        {inbox.length === 0 ? null : (
           <View
             style={[
               styles.listCard,
