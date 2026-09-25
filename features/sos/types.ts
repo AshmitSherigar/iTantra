@@ -29,6 +29,9 @@ export type ReceivedSos = {
   receivedAt: number;
   hops: number;
   isAuto: boolean;
+  /** Structured coords from envelope.sos (preferred over parsing URLs). */
+  lat?: number;
+  lon?: number;
 };
 
 export function formatRemaining(ms: number): string {

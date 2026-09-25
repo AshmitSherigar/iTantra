@@ -21,9 +21,11 @@ import {
 import type { BroadcastEnvelope } from '../features/bluetooth';
 import { useLanguage } from './LanguageContext';
 import {
+  SOS_STOP_SIREN_ACTION_ID,
   buildSosHelpText,
   cancelScheduled,
   clearActiveTimer,
+  ensureSosIncomingCategory,
   isKeeperKnownGood,
   loadActiveTimer,
   registerSosBackgroundTask,
@@ -31,6 +33,7 @@ import {
   saveLastFired,
   scheduleTimerNotifications,
   showImmediate,
+  showSosIncoming,
   tryGetLocation,
   wasLastKeeperStartFatal,
 } from '../features/sos';
@@ -138,12 +141,22 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
   const alertedSosIdsRef = useRef(new Set<string>());
 
   // ---- incoming SOS inbox (structured OR legacy prefix) ----
-  // New arrivals also raise a heads-up notification (fires in background)
+  // New arrivals raise a heads-up notification with a "Stop siren" action
   // and loop the siren so nearby rescuers hear it.
   useEffect(
     () =>
       subscribeToBroadcasts((envelope) => {
         if (!isSosEnvelope(envelope)) return;
+        const rawLat = envelope.sos?.lat;
+        const rawLon = envelope.sos?.lon;
+        const lat =
+          typeof rawLat === 'number' && Number.isFinite(rawLat)
+            ? rawLat
+            : undefined;
+        const lon =
+          typeof rawLon === 'number' && Number.isFinite(rawLon)
+            ? rawLon
+            : undefined;
         setInbox((current) => {
           if (current.some((m) => m.id === envelope.id)) return current;
           return [
@@ -157,13 +170,15 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
               isAuto:
                 envelope.sos?.isAuto ??
                 /missed check-in/i.test(envelope.message),
+              ...(lat !== undefined ? { lat } : {}),
+              ...(lon !== undefined ? { lon } : {}),
             },
             ...current,
           ].slice(0, 30);
         });
         if (alertedSosIdsRef.current.has(envelope.id)) return;
         alertedSosIdsRef.current.add(envelope.id);
-        void showImmediate(
+        void showSosIncoming(
           '🆘 SOS Emergency',
           `${envelope.senderName}: ${envelope.message}`.slice(0, 240),
         );
@@ -173,6 +188,32 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
       }),
     [],
   );
+
+  // "Stop siren" notification action (receiver taps it on the heads-up).
+  useEffect(() => {
+    try {
+      void ensureSosIncomingCategory();
+    } catch {}
+    let sub: { remove: () => void } | undefined;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const Notifications = require('expo-notifications');
+      sub = Notifications.addNotificationResponseReceivedListener?.(
+        (response: { actionIdentifier?: string }) => {
+          if (
+            response?.actionIdentifier === SOS_STOP_SIREN_ACTION_ID
+          ) {
+            void stopSosSiren();
+          }
+        },
+      );
+    } catch {}
+    return () => {
+      try {
+        sub?.remove();
+      } catch {}
+    };
+  }, []);
 
   // Persisted siren preference + live playing state for the SOS tab.
   useEffect(() => {
@@ -422,16 +463,23 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
       }, 2000);
     })();
     // Tapping the deadline notification re-opens the app — re-check expiry.
+    // Also handles the "Stop siren" action as a fallback.
     let sub: { remove: () => void } | undefined;
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const Notifications = require('expo-notifications');
-      sub = Notifications.addNotificationResponseReceivedListener?.(() => {
-        const t = activeTimerRef.current;
-        if (t && Date.now() >= t.deadlineAt) {
-          void fireExpiredTimerRef.current(t);
-        }
-      });
+      sub = Notifications.addNotificationResponseReceivedListener?.(
+        (response: { actionIdentifier?: string }) => {
+          if (response?.actionIdentifier === SOS_STOP_SIREN_ACTION_ID) {
+            void stopSosSiren();
+            return;
+          }
+          const t = activeTimerRef.current;
+          if (t && Date.now() >= t.deadlineAt) {
+            void fireExpiredTimerRef.current(t);
+          }
+        },
+      );
     } catch {}
     const appSub = AppState.addEventListener('change', (state) => {
       if (state === 'active') {

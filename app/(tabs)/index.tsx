@@ -32,6 +32,7 @@ import {
   MESH_DEFAULT_TTL,
   getEnvelopeTtl,
   getMeshStatus,
+  isSosEnvelope,
   makeMeshEnvelope,
   requestMeshDiscovery,
   sendNearbyBroadcast,
@@ -126,6 +127,14 @@ export default function Index() {
             ...current,
           ].slice(0, 20);
         });
+        // SOS is siren-only: stop any ongoing readout so the siren is clear,
+        // never speak the SOS text.
+        if (isSosEnvelope(envelope)) {
+          try {
+            meshSpeechRef.current.stop();
+          } catch {}
+          return;
+        }
         meshSpeechRef.current.speakBroadcast(envelope);
       }),
     [],

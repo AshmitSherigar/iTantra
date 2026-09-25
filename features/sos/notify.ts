@@ -80,22 +80,60 @@ export async function cancelScheduled(
   } catch {}
 }
 
+/** Category + action ids for the incoming-SOS notification. */
+export const SOS_INCOMING_CATEGORY_ID = 'sos-incoming';
+export const SOS_STOP_SIREN_ACTION_ID = 'STOP_SIREN';
+
+/** Registers the "Stop siren" action button (Android + iOS). Safe no-op on web. */
+export async function ensureSosIncomingCategory(): Promise<void> {
+  try {
+    if (!NotificationsRef?.setNotificationCategoryAsync) return;
+    await NotificationsRef.setNotificationCategoryAsync(
+      SOS_INCOMING_CATEGORY_ID,
+      [
+        {
+          identifier: SOS_STOP_SIREN_ACTION_ID,
+          buttonTitle: 'Stop siren',
+          options: { opensAppToForeground: false },
+        },
+      ] as never,
+    );
+  } catch {}
+}
+
 export async function showImmediate(
   title: string,
   body: string,
+  options?: { categoryIdentifier?: string; sound?: boolean },
 ): Promise<void> {
   try {
     if (!NotificationsRef) return;
+    if (options?.categoryIdentifier) {
+      await ensureSosIncomingCategory();
+    }
     await NotificationsRef.scheduleNotificationAsync({
       content: {
         title,
         body,
-        sound: true,
+        sound: options?.sound ?? true,
         priority: NotificationsRef?.AndroidNotificationPriority?.MAX,
+        ...(options?.categoryIdentifier
+          ? { categoryIdentifier: options.categoryIdentifier }
+          : {}),
       },
       trigger: null,
     });
   } catch {}
+}
+
+/** Incoming SOS heads-up: siren is the alert, notification carries Stop action. */
+export async function showSosIncoming(title: string, body: string): Promise<void> {
+  await ensureSosNotificationChannel();
+  await ensureSosIncomingCategory();
+  await showImmediate(title, body, {
+    categoryIdentifier: SOS_INCOMING_CATEGORY_ID,
+    sound: true,
+  });
 }
 
 /**

@@ -18,9 +18,16 @@ import * as Haptics from 'expo-haptics';
 import { useTheme } from '../../context/ThemeContext';
 import { useSos } from '../../context/SosContext';
 import { SOS_PRESETS, formatRemaining } from '../../features/sos';
-import { extractMapUrl } from '../../features/sos/links';
-import LinkifiedMessage from '../../features/sos/LinkifiedMessage';
+import {
+  resolveSosMapUrl,
+  stripUrlsForDisplay,
+} from '../../features/sos/links';
 import { FontSize, Radius, Spacing } from '../../constants/theme';
+
+function hopLabel(hops: number): string {
+  if (hops <= 0) return 'direct';
+  return hops === 1 ? '1 hop' : `${hops} hops`;
+}
 
 export default function SosScreen() {
   const { colors } = useTheme();
@@ -150,6 +157,14 @@ export default function SosScreen() {
     );
   }
 
+  function handleClearInbox() {
+    if (inbox.length === 0) return;
+    Alert.alert('Clear received SOS?', 'This removes all SOS messages here.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Clear', style: 'destructive', onPress: clearInbox },
+    ]);
+  }
+
   return (
     <SafeAreaView
       style={[styles.container, { backgroundColor: colors.background }]}
@@ -161,35 +176,26 @@ export default function SosScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
-          <View>
+          <View style={{ flex: 1 }}>
             <Text style={[styles.overline, { color: colors.textSecondary }]}>
               Safety
             </Text>
-            <Text style={[styles.title, { color: colors.text }]}>
-              SOS Timer
+            <Text style={[styles.title, { color: colors.text }]}>SOS</Text>
+            <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
+              Alert nearby phones in an emergency
             </Text>
           </View>
           <View
             style={[
               styles.livePill,
               {
-                backgroundColor: activeTimer ? colors.error : colors.surface,
-                borderColor: colors.border,
+                backgroundColor: activeTimer ? colors.error : colors.success,
+                borderColor: activeTimer ? colors.error : colors.success,
               },
             ]}
           >
-            <View
-              style={[
-                styles.liveDot,
-                { backgroundColor: activeTimer ? '#FFFFFF' : colors.success },
-              ]}
-            />
-            <Text
-              style={[
-                styles.liveText,
-                { color: activeTimer ? '#FFFFFF' : colors.textSecondary },
-              ]}
-            >
+            <View style={styles.liveDot} />
+            <Text style={styles.liveText}>
               {activeTimer ? 'ARMED' : 'READY'}
             </Text>
           </View>
@@ -200,11 +206,25 @@ export default function SosScreen() {
           <View
             style={[
               styles.card,
-              { backgroundColor: colors.surface, borderColor: colors.error },
+              styles.armedCard,
+              {
+                backgroundColor: colors.surface,
+                borderColor: colors.error,
+              },
             ]}
           >
-            <View style={styles.timerTop}>
-              <Ionicons name="timer-outline" size={22} color={colors.error} />
+            <View style={styles.armedHeader}>
+              <View
+                style={[
+                  styles.armedBadge,
+                  { backgroundColor: `${colors.error}1A` },
+                ]}
+              >
+                <Ionicons name="timer" size={16} color={colors.error} />
+                <Text style={[styles.armedBadgeText, { color: colors.error }]}>
+                  TIMER ARMED
+                </Text>
+              </View>
               <Text style={[styles.timerCountdown, { color: colors.text }]}>
                 {formatRemaining(remainingMs)}
               </Text>
@@ -217,12 +237,19 @@ export default function SosScreen() {
                 : ''}
             </Text>
             {activeTimer.helpMessage ? (
-              <Text
-                style={[styles.helpPreview, { color: colors.text }]}
-                numberOfLines={3}
+              <View
+                style={[
+                  styles.quoteBox,
+                  { backgroundColor: colors.inputBackground },
+                ]}
               >
-                “{activeTimer.helpMessage}”
-              </Text>
+                <Text
+                  style={[styles.helpPreview, { color: colors.text }]}
+                  numberOfLines={3}
+                >
+                  “{activeTimer.helpMessage}”
+                </Text>
+              </View>
             ) : null}
             <View style={styles.progressTrack}>
               <View
@@ -284,12 +311,15 @@ export default function SosScreen() {
               { backgroundColor: colors.surface, borderColor: colors.border },
             ]}
           >
-            <Text style={[styles.cardTitle, { color: colors.text }]}>
-              Arm a safety timer
-            </Text>
+            <View style={styles.cardTitleRow}>
+              <Ionicons name="shield-checkmark" size={20} color={colors.primary} />
+              <Text style={[styles.cardTitle, { color: colors.text }]}>
+                Arm a safety timer
+              </Text>
+            </View>
             <Text style={[styles.muted, { color: colors.textSecondary }]}>
-              Based on your workspace time. Miss the check-in and SOS
-              auto-broadcasts to everyone nearby.
+              Miss the check-in and SOS auto-broadcasts to everyone nearby with
+              your message + location.
             </Text>
 
             <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
@@ -307,7 +337,9 @@ export default function SosScreen() {
                         backgroundColor: selected
                           ? colors.primary
                           : colors.inputBackground,
-                        borderColor: colors.border,
+                        borderColor: selected
+                          ? colors.primary
+                          : colors.border,
                       },
                     ]}
                     onPress={() => {
@@ -336,7 +368,7 @@ export default function SosScreen() {
                     backgroundColor: useCustom
                       ? colors.primary
                       : colors.inputBackground,
-                    borderColor: colors.border,
+                    borderColor: useCustom ? colors.primary : colors.border,
                     flex: 0,
                     paddingHorizontal: 14,
                   },
@@ -367,6 +399,7 @@ export default function SosScreen() {
                   {
                     backgroundColor: colors.inputBackground,
                     color: colors.text,
+                    borderColor: colors.border,
                     flex: 1,
                   },
                 ]}
@@ -383,7 +416,11 @@ export default function SosScreen() {
               placeholderTextColor={colors.textSecondary}
               style={[
                 styles.input,
-                { backgroundColor: colors.inputBackground, color: colors.text },
+                {
+                  backgroundColor: colors.inputBackground,
+                  color: colors.text,
+                  borderColor: colors.border,
+                },
               ]}
             />
 
@@ -401,13 +438,22 @@ export default function SosScreen() {
                 {
                   backgroundColor: colors.inputBackground,
                   color: colors.text,
+                  borderColor: colors.border,
                   minHeight: 64,
                   textAlignVertical: 'top',
                 },
               ]}
             />
 
-            <View style={styles.locationRow}>
+            <View
+              style={[
+                styles.locationRow,
+                {
+                  backgroundColor: colors.inputBackground,
+                  borderColor: colors.border,
+                },
+              ]}
+            >
               <Ionicons
                 name={includeLocation ? 'location' : 'location-outline'}
                 size={18}
@@ -417,8 +463,8 @@ export default function SosScreen() {
                 <Text style={[styles.locationTitle, { color: colors.text }]}>
                   Include location
                 </Text>
-                <Text style={[styles.muted, { color: colors.textSecondary }]}>
-                  GPS lat/lon + maps link in the SOS, when available
+                <Text style={[styles.mutedSmall, { color: colors.textSecondary }]}>
+                  GPS + Map button on receiver phones
                 </Text>
               </View>
               <Switch
@@ -465,7 +511,10 @@ export default function SosScreen() {
           </View>
         )}
 
-        {/* Manual SOS */}
+        {/* Manual SOS — emergency first */}
+        <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>
+          EMERGENCY
+        </Text>
         <TouchableOpacity
           style={[
             styles.sosButton,
@@ -478,11 +527,16 @@ export default function SosScreen() {
           {isFiring ? (
             <ActivityIndicator size="small" color="#FFFFFF" />
           ) : (
-            <Ionicons name="alert-circle" size={22} color="#FFFFFF" />
+            <Ionicons name="alert-circle" size={24} color="#FFFFFF" />
           )}
-          <Text style={styles.sosButtonText}>
-            {isFiring ? 'Sending…' : 'SEND SOS NOW'}
-          </Text>
+          <View>
+            <Text style={styles.sosButtonText}>
+              {isFiring ? 'Sending…' : 'SEND SOS NOW'}
+            </Text>
+            <Text style={styles.sosButtonSub}>
+              Broadcast to nearby phones
+            </Text>
+          </View>
         </TouchableOpacity>
         <Text
           style={[
@@ -490,10 +544,10 @@ export default function SosScreen() {
             { color: colors.textSecondary, textAlign: 'center' },
           ]}
         >
-          Manual SOS floods to all nearby phones immediately (3 tries).
+          Uses your help message + location above. Floods 3 tries.
         </Text>
 
-        {/* Siren & alerts — loops a loud siren on incoming SOS + on missed check-in */}
+        {/* Siren & alerts */}
         <View
           style={[
             styles.card,
@@ -503,24 +557,64 @@ export default function SosScreen() {
             },
           ]}
         >
-          <View style={styles.locationRow}>
-            <Ionicons
-              name={sirenEnabled ? 'megaphone' : 'megaphone-outline'}
-              size={18}
-              color={
-                sirenPlaying
-                  ? colors.error
-                  : sirenEnabled
-                    ? colors.primary
-                    : colors.textSecondary
-              }
-            />
+          <View style={styles.sirenHeader}>
+            <View
+              style={[
+                styles.sirenIcon,
+                {
+                  backgroundColor: sirenPlaying
+                    ? `${colors.error}1A`
+                    : colors.inputBackground,
+                },
+              ]}
+            >
+              <Ionicons
+                name={sirenEnabled ? 'megaphone' : 'megaphone-outline'}
+                size={18}
+                color={
+                  sirenPlaying
+                    ? colors.error
+                    : sirenEnabled
+                      ? colors.primary
+                      : colors.textSecondary
+                }
+              />
+            </View>
             <View style={{ flex: 1 }}>
-              <Text style={[styles.locationTitle, { color: colors.text }]}>
-                SOS siren{sirenPlaying ? ' — SOUNDING' : ''}
-              </Text>
-              <Text style={[styles.muted, { color: colors.textSecondary }]}>
-                Loops on incoming SOS and on your missed check-in
+              <View style={styles.sirenTitleRow}>
+                <Text style={[styles.locationTitle, { color: colors.text }]}>
+                  SOS siren
+                </Text>
+                <View
+                  style={[
+                    styles.statusChip,
+                    {
+                      backgroundColor: sirenPlaying
+                        ? colors.error
+                        : sirenEnabled
+                          ? `${colors.success}1A`
+                          : colors.inputBackground,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.statusChipText,
+                      {
+                        color: sirenPlaying
+                          ? '#FFFFFF'
+                          : sirenEnabled
+                            ? colors.success
+                            : colors.textSecondary,
+                      },
+                    ]}
+                  >
+                    {sirenPlaying ? 'SOUNDING' : sirenEnabled ? 'ON' : 'OFF'}
+                  </Text>
+                </View>
+              </View>
+              <Text style={[styles.mutedSmall, { color: colors.textSecondary }]}>
+                Loops on incoming SOS. Stop it here or from the notification.
               </Text>
             </View>
             <Switch
@@ -569,9 +663,23 @@ export default function SosScreen() {
         </View>
 
         {lastResult ? (
-          <Text style={[styles.resultLine, { color: colors.textSecondary }]}>
-            {lastResult}
-          </Text>
+          <View
+            style={[
+              styles.resultBanner,
+              { backgroundColor: colors.inputBackground },
+            ]}
+          >
+            <Ionicons
+              name="information-circle-outline"
+              size={16}
+              color={colors.textSecondary}
+            />
+            <Text
+              style={[styles.resultText, { color: colors.textSecondary }]}
+            >
+              {lastResult}
+            </Text>
+          </View>
         ) : null}
 
         {pendingRetry ? (
@@ -581,9 +689,12 @@ export default function SosScreen() {
               { backgroundColor: colors.surface, borderColor: colors.warning },
             ]}
           >
-            <Text style={[styles.cardTitle, { color: colors.text }]}>
-              SOS not delivered
-            </Text>
+            <View style={styles.cardTitleRow}>
+              <Ionicons name="warning" size={20} color={colors.warning} />
+              <Text style={[styles.cardTitle, { color: colors.text }]}>
+                SOS not delivered
+              </Text>
+            </View>
             <Text style={[styles.muted, { color: colors.textSecondary }]}>
               No nearby phones were reachable. Keep the app open and re-send
               when phones are near.
@@ -603,12 +714,35 @@ export default function SosScreen() {
 
         {/* Received SOS inbox */}
         <View style={styles.sectionHeader}>
-          <Text style={[styles.overline, { color: colors.textSecondary }]}>
-            Received SOS · {inbox.length}
-          </Text>
+          <View style={styles.inboxTitleRow}>
+            <Text style={[styles.overline, { color: colors.textSecondary }]}>
+              Received SOS
+            </Text>
+            <View
+              style={[
+                styles.countBadge,
+                {
+                  backgroundColor:
+                    inbox.length > 0 ? colors.error : colors.inputBackground,
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.countBadgeText,
+                  {
+                    color:
+                      inbox.length > 0 ? '#FFFFFF' : colors.textSecondary,
+                  },
+                ]}
+              >
+                {inbox.length}
+              </Text>
+            </View>
+          </View>
           {inbox.length > 0 ? (
             <TouchableOpacity
-              onPress={clearInbox}
+              onPress={handleClearInbox}
               hitSlop={10}
               activeOpacity={0.6}
             >
@@ -619,47 +753,112 @@ export default function SosScreen() {
           ) : null}
         </View>
         {inbox.length === 0 ? (
-          <Text style={[styles.muted, { color: colors.textSecondary }]}>
-            SOS broadcasts from nearby phones land here in red.
-          </Text>
-        ) : (
           <View
             style={[
-              styles.listCard,
-              { backgroundColor: colors.surface, borderColor: colors.error },
+              styles.emptyCard,
+              {
+                backgroundColor: colors.surface,
+                borderColor: colors.border,
+              },
             ]}
           >
-            {inbox.map((item, i) => {
-              const mapUrl = extractMapUrl(item.message);
-              return (
+            <Ionicons
+              name="shield-checkmark-outline"
+              size={28}
+              color={colors.textSecondary}
+            />
+            <Text style={[styles.emptyTitle, { color: colors.text }]}>
+              No SOS received
+            </Text>
+            <Text
+              style={[styles.mutedSmall, { color: colors.textSecondary }]}
+            >
+              SOS broadcasts from nearby phones land here with a Map button.
+            </Text>
+          </View>
+        ) : (
+          inbox.map((item) => {
+            const mapUrl = resolveSosMapUrl(item.message, item.lat, item.lon);
+            const displayMessage = stripUrlsForDisplay(item.message);
+            return (
+              <View
+                key={item.id}
+                style={[
+                  styles.sosCard,
+                  {
+                    backgroundColor: colors.surface,
+                    borderColor: colors.border,
+                  },
+                ]}
+              >
                 <View
-                  key={item.id}
                   style={[
-                    styles.messageBlock,
-                    i < inbox.length - 1 && {
-                      borderBottomWidth: StyleSheet.hairlineWidth,
-                      borderBottomColor: colors.border,
-                    },
+                    styles.sosAccent,
+                    { backgroundColor: colors.error },
                   ]}
-                >
+                />
+                <View style={styles.sosCardBody}>
+                  <View style={styles.sosCardTop}>
+                    <Text
+                      style={[styles.senderName, { color: colors.text }]}
+                      numberOfLines={1}
+                    >
+                      🆘 {item.senderName}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.timeText,
+                        { color: colors.textSecondary },
+                      ]}
+                    >
+                      {new Date(item.receivedAt).toLocaleTimeString()}
+                    </Text>
+                  </View>
+                  <View style={styles.chipRow}>
+                    <View
+                      style={[
+                        styles.chip,
+                        {
+                          backgroundColor: item.isAuto
+                            ? `${colors.warning}1A`
+                            : `${colors.error}1A`,
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.chipText,
+                          {
+                            color: item.isAuto
+                              ? colors.warning
+                              : colors.error,
+                          },
+                        ]}
+                      >
+                        {item.isAuto ? 'AUTO • missed check-in' : 'MANUAL'}
+                      </Text>
+                    </View>
+                    <View
+                      style={[
+                        styles.chip,
+                        { backgroundColor: colors.inputBackground },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.chipText,
+                          { color: colors.textSecondary },
+                        ]}
+                      >
+                        {hopLabel(item.hops)}
+                      </Text>
+                    </View>
+                  </View>
                   <Text
-                    style={[styles.messageMeta, { color: colors.error }]}
-                    numberOfLines={1}
+                    style={[styles.messageText, { color: colors.text }]}
                   >
-                    🆘 {item.senderName} ·{' '}
-                    {item.isAuto ? 'auto (missed check-in)' : 'manual'} ·{' '}
-                    {item.hops <= 0
-                      ? 'direct'
-                      : item.hops === 1
-                        ? '1 hop'
-                        : `${item.hops} hops`}{' '}
-                    · {new Date(item.receivedAt).toLocaleTimeString()}
+                    {displayMessage}
                   </Text>
-                  <LinkifiedMessage
-                    message={item.message}
-                    textStyle={[styles.messageText, { color: colors.text }]}
-                    linkColor={colors.primary}
-                  />
                   {mapUrl ? (
                     <TouchableOpacity
                       style={[
@@ -691,9 +890,9 @@ export default function SosScreen() {
                     </TouchableOpacity>
                   ) : null}
                 </View>
-              );
-            })}
-          </View>
+              </View>
+            );
+          })
         )}
       </ScrollView>
     </SafeAreaView>
@@ -705,9 +904,10 @@ const styles = StyleSheet.create({
   scrollContent: { paddingTop: Spacing.md, paddingBottom: Spacing.xl },
   header: {
     flexDirection: 'row',
-    alignItems: 'flex-end',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
     marginBottom: Spacing.sm,
+    gap: 12,
   },
   overline: {
     fontSize: 11,
@@ -715,26 +915,53 @@ const styles = StyleSheet.create({
     letterSpacing: 1.4,
     textTransform: 'uppercase',
   },
-  title: { marginTop: 2, fontSize: 27, fontWeight: '800', letterSpacing: -0.5 },
+  title: { marginTop: 2, fontSize: 30, fontWeight: '800', letterSpacing: -0.5 },
+  subtitle: { marginTop: 2, fontSize: 13, lineHeight: 18 },
   livePill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
     borderRadius: Radius.round,
     borderWidth: 1,
+    marginTop: 6,
   },
-  liveDot: { width: 7, height: 7, borderRadius: 4 },
-  liveText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.8 },
+  liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#FFFFFF' },
+  liveText: { fontSize: 11, fontWeight: '800', letterSpacing: 0.8, color: '#FFFFFF' },
+  sectionLabel: {
+    marginTop: Spacing.lg,
+    marginBottom: 8,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 1.2,
+  },
   card: {
     borderRadius: Radius.lg,
     borderWidth: 1,
     padding: Spacing.md,
     marginTop: Spacing.sm,
   },
+  armedCard: { borderWidth: 1.5 },
+  armedHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  armedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: Radius.round,
+  },
+  armedBadgeText: { fontSize: 11, fontWeight: '800', letterSpacing: 0.8 },
+  cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   cardTitle: { fontSize: 16, fontWeight: '800' },
   muted: { marginTop: 4, fontSize: 13, lineHeight: 19 },
+  mutedSmall: { marginTop: 2, fontSize: 12, lineHeight: 17 },
   fieldLabel: {
     marginTop: Spacing.md,
     marginBottom: 6,
@@ -757,12 +984,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: Radius.md,
+    borderWidth: 1,
     fontSize: 15,
   },
-  helpPreview: { marginTop: 8, fontSize: 14, fontStyle: 'italic' },
-  timerTop: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  quoteBox: {
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: Radius.md,
+  },
+  helpPreview: { fontSize: 14, fontStyle: 'italic', lineHeight: 20 },
   timerCountdown: {
-    fontSize: 38,
+    fontSize: 34,
     fontWeight: '800',
     fontVariant: ['tabular-nums'],
   },
@@ -801,6 +1034,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     marginTop: Spacing.md,
+    padding: 12,
+    borderRadius: Radius.md,
+    borderWidth: 1,
   },
   locationTitle: { fontSize: 15, fontWeight: '700' },
   startButton: {
@@ -817,24 +1053,40 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 10,
-    marginTop: Spacing.lg,
-    height: 60,
-    borderRadius: Radius.round,
+    gap: 12,
+    marginTop: 4,
+    minHeight: 68,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: Radius.lg,
   },
   sosButtonText: {
     color: '#FFFFFF',
-    fontSize: 18,
+    fontSize: 19,
     fontWeight: '800',
     letterSpacing: 0.5,
   },
-  finePrint: { marginTop: 8, fontSize: 12, lineHeight: 17 },
-  resultLine: {
-    marginTop: Spacing.sm,
-    fontSize: 13,
-    textAlign: 'center',
-    lineHeight: 19,
+  sosButtonSub: { color: '#FFFFFFCC', fontSize: 12, fontWeight: '600' },
+  sirenHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  sirenIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
+  sirenTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  statusChip: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: Radius.round },
+  statusChipText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.6 },
+  finePrint: { marginTop: 8, fontSize: 12, lineHeight: 17 },
+  resultBanner: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: Spacing.sm,
+    padding: 12,
+    borderRadius: Radius.md,
+  },
+  resultText: { flex: 1, fontSize: 13, lineHeight: 19 },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -842,14 +1094,46 @@ const styles = StyleSheet.create({
     marginTop: Spacing.lg,
     marginBottom: Spacing.sm,
   },
+  inboxTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  countBadge: {
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+  },
+  countBadgeText: { fontSize: 12, fontWeight: '800' },
   clearText: { fontSize: 13, fontWeight: '700' },
-  listCard: {
+  emptyCard: {
     borderRadius: Radius.lg,
     borderWidth: 1,
-    paddingHorizontal: Spacing.md,
+    borderStyle: 'dashed',
+    padding: Spacing.lg,
+    alignItems: 'center',
+    gap: 6,
   },
-  messageBlock: { paddingVertical: 11, gap: 4 },
-  messageMeta: { fontSize: 11, fontWeight: '700' },
+  emptyTitle: { marginTop: 6, fontSize: 15, fontWeight: '800' },
+  sosCard: {
+    flexDirection: 'row',
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    marginTop: 8,
+    overflow: 'hidden',
+  },
+  sosAccent: { width: 4 },
+  sosCardBody: { flex: 1, padding: Spacing.md, gap: 6 },
+  sosCardTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  senderName: { flex: 1, fontSize: 15, fontWeight: '800' },
+  timeText: { fontSize: 12, fontWeight: '600' },
+  chipRow: { flexDirection: 'row', gap: 6, flexWrap: 'wrap' },
+  chip: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: Radius.round },
+  chipText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.4 },
   messageText: { fontSize: 15, lineHeight: 21 },
   mapButton: {
     flexDirection: 'row',
@@ -858,7 +1142,7 @@ const styles = StyleSheet.create({
     gap: 6,
     marginTop: 6,
     paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingVertical: 9,
     borderRadius: Radius.round,
   },
   mapButtonText: { fontSize: 13, fontWeight: '800' },

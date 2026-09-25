@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 import { hindiTTS } from '../tts/HindiTTS';
 import { getLanguage, ttsPathFor, type LanguageId } from '../models/languages';
-import type { BroadcastEnvelope } from './broadcast';
+import { isSosEnvelope, type BroadcastEnvelope } from './broadcast';
 
 const IDLE_POLL_MS = 200;
 const IDLE_TIMEOUT_MS = 60000;
@@ -79,6 +79,8 @@ export function useMeshSpeech(defaultEnabled = true) {
 
   const speakBroadcast = useCallback((envelope: BroadcastEnvelope) => {
     if (Platform.OS === 'web') return;
+    // SOS is siren-only: never read the SOS text aloud.
+    if (isSosEnvelope(envelope)) return;
     const text = envelope?.message?.trim();
     if (!text) return;
     const langId = (envelope.language ?? 'en') as LanguageId;

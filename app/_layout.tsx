@@ -12,7 +12,9 @@ import {
   isSosEnvelope,
   subscribeToBroadcasts,
 } from '../features/bluetooth';
-import { extractMapUrl } from '../features/sos/links';
+import { resolveSosMapUrl } from '../features/sos/links';
+import { ensureSosIncomingCategory } from '../features/sos/notify';
+import { stopSosSiren } from '../features/sos/siren';
 
 import { SUPPORTED_LANGUAGES } from '../features/models/languages';
 
@@ -41,6 +43,9 @@ export default function RootLayout() {
         }),
       });
     } catch {}
+    try {
+      void ensureSosIncomingCategory();
+    } catch {}
     return subscribeToBroadcasts((broadcast) => {
       const lang = broadcastLangLabel(broadcast.language);
       const hops = broadcastHopCount(broadcast);
@@ -50,7 +55,11 @@ export default function RootLayout() {
         try {
           Vibration.vibrate([0, 500, 250, 500]);
         } catch {}
-        const mapUrl = extractMapUrl(broadcast.message);
+        const mapUrl = resolveSosMapUrl(
+          broadcast.message,
+          broadcast.sos?.lat,
+          broadcast.sos?.lon,
+        );
         Alert.alert(
           '🆘 SOS Emergency',
           `${broadcast.senderName}${lang ? ` (${lang})` : ''}: ${broadcast.message}${hopSuffix}`,
@@ -65,6 +74,12 @@ export default function RootLayout() {
                   } as const,
                 ]
               : []),
+            {
+              text: 'Stop siren',
+              onPress: () => {
+                void stopSosSiren();
+              },
+            },
             { text: 'Open SOS tab', onPress: () => {} },
             { text: 'Dismiss', style: 'cancel' },
           ],
