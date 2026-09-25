@@ -10,10 +10,12 @@ export default function TabsLayout() {
   const colors = themeContext.colors ??
     themeContext.theme?.colors ?? {
       primary: '#007AFF',
+      error: '#DC2626',
       textSecondary: '#8E8E93',
       surface: '#FFFFFF',
       border: '#E5E5EA',
     };
+  const sosRed = (colors as any).error ?? '#DC2626';
 
   return (
     <Tabs
@@ -66,8 +68,10 @@ export default function TabsLayout() {
         name="sos"
         options={{
           title: 'SOS',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="alert-circle-outline" size={size} color={color} />
+          tabBarAccessibilityLabel: 'SOS, emergency',
+          tabBarActiveTintColor: sosRed,
+          tabBarIcon: ({ size }) => (
+            <Ionicons name="alert-circle" size={size} color={sosRed} />
           ),
         }}
       />

@@ -6,6 +6,10 @@ export default function AboutScreen() {
       <View style={styles.content}>
         <Text style={styles.appName}>VaaniSetu</Text>
 
+        <Text style={styles.description}>
+          Offline voice + SOS for nearby phones.
+        </Text>
+
         <Text style={styles.version}>Version 1.0.0</Text>
       </View>
     </View>

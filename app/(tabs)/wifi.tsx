@@ -400,11 +400,9 @@ export default function WifiScreen() {
           <Text style={[styles.headerLabel, { color: colors.textSecondary }]}>
             VaaniSetu WiFi
           </Text>
-          {ssid ? (
-            <Text style={[{ fontSize: 12, color: colors.textSecondary }]}>
-              WiFi: {ssid}
-            </Text>
-          ) : null}
+          <Text style={[{ fontSize: 12, color: colors.textSecondary }]}>
+            {ssid ? `WiFi: ${ssid}` : 'Same WiFi • no internet needed'}
+          </Text>
         </View>
         <View
           style={[
@@ -436,6 +434,14 @@ export default function WifiScreen() {
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.section}>
+            <Text
+              style={[
+                styles.sectionDescription,
+                { color: colors.textSecondary },
+              ]}
+            >
+              Same WiFi, no internet needed. Tap Connect All.
+            </Text>
             <Text style={[styles.nameLabel, { color: colors.textSecondary }]}>
               DEVICE NAME
             </Text>
@@ -494,7 +500,15 @@ export default function WifiScreen() {
 
           <View style={styles.section}>
             <Text style={[styles.sectionTitle, { color: colors.text }]}>
-              Broadcast ({connectedAddresses.length})
+              Broadcast for help ({connectedAddresses.length})
+            </Text>
+            <Text
+              style={[
+                styles.sectionDescription,
+                { color: colors.textSecondary },
+              ]}
+            >
+              Everyone connected gets it.
             </Text>
             <View
               style={[
@@ -550,7 +564,7 @@ export default function WifiScreen() {
               <TextInput
                 value={broadcastInput}
                 onChangeText={setBroadcastInput}
-                placeholder="Broadcast…"
+                placeholder="Broadcast for help…"
                 placeholderTextColor={colors.textSecondary}
                 style={[
                   styles.input,
@@ -575,6 +589,15 @@ export default function WifiScreen() {
                 onPress={handleVoiceToggle}
                 disabled={isTranscribing}
                 activeOpacity={0.82}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  isVoiceRecording
+                    ? 'Stop recording'
+                    : chatPeer
+                      ? 'Record voice message'
+                      : 'Record voice broadcast'
+                }
+                accessibilityState={{ disabled: isTranscribing }}
               >
                 {isTranscribing ? (
                   <ActivityIndicator size="small" color={colors.primary} />
@@ -732,6 +755,14 @@ export default function WifiScreen() {
                 <Text style={[styles.emptyStateTitle, { color: colors.text }]}>
                   No devices
                 </Text>
+                <Text
+                  style={[
+                    styles.emptyStateText,
+                    { color: colors.textSecondary },
+                  ]}
+                >
+                  Join same WiFi, open this tab, tap Connect All.
+                </Text>
               </View>
             ) : (
               <View style={styles.deviceList}>
@@ -878,7 +909,16 @@ export default function WifiScreen() {
             contentContainerStyle={styles.messagesContent}
             keyboardShouldPersistTaps="handled"
           >
-            {chatMessages.length === 0 ? null : (
+            {chatMessages.length === 0 ? (
+              <Text
+                style={[
+                  styles.emptyChatText,
+                  { color: colors.textSecondary, textAlign: 'center' },
+                ]}
+              >
+                Messages with this phone appear here.
+              </Text>
+            ) : (
               chatMessages.map((chatMessage) => (
                 <View
                   key={chatMessage.id}
@@ -1112,6 +1152,11 @@ export default function WifiScreen() {
               onPress={handleVoiceToggle}
               disabled={isTranscribing}
               activeOpacity={0.82}
+              accessibilityRole="button"
+              accessibilityLabel={
+                isVoiceRecording ? 'Stop recording' : 'Record voice message'
+              }
+              accessibilityState={{ disabled: isTranscribing }}
             >
               {isTranscribing ? (
                 <ActivityIndicator size="small" color={colors.primary} />
