@@ -24,6 +24,20 @@ export default function SettingsLayout() {
           title: 'About App',
         }}
       />
+
+      <Stack.Screen
+        name="benchmark"
+        options={{
+          title: 'Benchmarks & Telemetry',
+        }}
+      />
+
+      <Stack.Screen
+        name="stt-benchmark"
+        options={{
+          title: 'STT Accuracy Trials',
+        }}
+      />
     </Stack>
   );
 }
