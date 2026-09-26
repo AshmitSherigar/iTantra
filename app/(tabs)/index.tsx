@@ -19,6 +19,7 @@ import {
   Eraser,
   Globe,
   Megaphone,
+  Radio,
   Siren,
   Square,
   Volume2,
@@ -612,6 +613,27 @@ export default function Index() {
             style={[styles.sosLinkText, { color: colors.error }]}
           >
             Need help now? Open SOS
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          onPress={() => router.push('/mission-mode' as any)}
+          activeOpacity={0.7}
+          style={[
+            styles.sosLink,
+            {
+              backgroundColor: colors.primaryMuted,
+              borderColor: colors.glassBorder,
+            },
+          ]}
+        >
+          <Radio size={16} color={colors.primary} />
+          <Text
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            style={[styles.sosLinkText, { color: colors.primary }]}
+          >
+            Launch Mission Mode
           </Text>
         </TouchableOpacity>
 
