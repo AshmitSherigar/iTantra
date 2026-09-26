@@ -78,6 +78,37 @@ export default function SettingsScreen() {
 
         <View style={styles.section}>
           <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
+            Diagnostics
+          </Text>
+
+          <TouchableOpacity
+            style={[styles.settingRow, { backgroundColor: colors.surface }]}
+            activeOpacity={0.7}
+            onPress={() => router.push('/settings/benchmark')}
+          >
+            <View style={styles.textContainer}>
+              <Text style={[styles.settingTitle, { color: colors.text }]}>
+                Benchmarks & Telemetry
+              </Text>
+
+              <Text
+                style={[
+                  styles.settingDescription,
+                  { color: colors.textSecondary },
+                ]}
+              >
+                UTF-8 framing suite, latency stats, and live telemetry
+              </Text>
+            </View>
+
+            <Text style={[styles.arrow, { color: colors.textSecondary }]}>
+              ›
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.section}>
+          <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
             About
           </Text>
 
@@ -101,6 +132,7 @@ export default function SettingsScreen() {
         <Text style={[styles.version, { color: colors.textSecondary }]}>
           v1.0.0
         </Text>
+
       </ScrollView>
     </SafeAreaView>
   );
