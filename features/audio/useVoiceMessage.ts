@@ -6,6 +6,7 @@ import { createPcmLiveStream } from 'react-native-sherpa-onnx/audio';
 import type { PcmLiveStreamHandle } from 'react-native-sherpa-onnx/audio';
 import { sttEngine } from '../stt/stt-engine';
 import type { STTStatus } from '../stt/stt-engine';
+import { benchmarkLogger } from '../benchmark/BenchmarkLogger';
 
 export type UseVoiceMessageReturn = {
   /** Whether the microphone is actively recording. */
@@ -102,6 +103,7 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
   const micStateRef = useRef<'idle' | 'starting' | 'live'>('idle');
   const startPromiseRef = useRef<Promise<void> | null>(null);
   const pendingStopRef = useRef(false);
+  const currentTraceIdRef = useRef<string | null>(null);
 
   const teardownMicListeners = useCallback(() => {
     removeDataListenerRef.current?.();
@@ -157,14 +159,24 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
       }
       setSttLoading(true);
       setSttError(null);
+      const loadTraceId = benchmarkLogger.generateTraceId('stt-load');
+      benchmarkLogger.logEvent('STT_MODEL_LOAD_START', loadTraceId, {
+        extraInfo: modelPath ?? 'default',
+      });
       pushLog(
         `[STT] Loading speech model ${modelPath ?? '(default)'} (after BLE connect)…`,
       );
       try {
         await sttEngine.ensureInitialized(modelPath as string | undefined);
+        benchmarkLogger.logEvent('STT_MODEL_LOAD_END', loadTraceId, {
+          extraInfo: 'success',
+        });
         pushLog('[STT] Speech model ready.');
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        benchmarkLogger.logEvent('STT_MODEL_LOAD_END', loadTraceId, {
+          extraInfo: `failure:${msg}`,
+        });
         pushLog(`[STT] Model load FAILED: ${msg}`);
         setSttError(msg);
       } finally {
@@ -175,11 +187,22 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
   );
 
   const releaseStt = useCallback(async () => {
+    if (!sttEngine.isInitialized()) {
+      refreshSttState();
+      return;
+    }
+    const traceId = benchmarkLogger.generateTraceId('stt-unload');
+    benchmarkLogger.logEvent('STT_MODEL_UNLOAD_START', traceId);
     try {
       await sttEngine.release();
+      benchmarkLogger.logEvent('STT_MODEL_UNLOAD_END', traceId, {
+        extraInfo: 'success',
+      });
       pushLog('[STT] Speech model released (RAM freed).');
     } catch {
-      // ignore
+      benchmarkLogger.logEvent('STT_MODEL_UNLOAD_END', traceId, {
+        extraInfo: 'failure',
+      });
     } finally {
       refreshSttState();
     }
@@ -358,6 +381,9 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
 
     micStateRef.current = 'live';
     setIsRecording(true);
+    const traceId = benchmarkLogger.generateTraceId('voice');
+    currentTraceIdRef.current = traceId;
+    benchmarkLogger.logEvent('AUDIO_RECORD_START', traceId);
     pushLog('[Mic] Recording started…');
   }, [pushLog, teardownMicListeners]);
 
@@ -365,6 +391,8 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
     setError(null);
     setIsTranscribing(true);
     setIsRecording(false);
+    const traceId =
+      currentTraceIdRef.current || benchmarkLogger.generateTraceId('voice');
 
     if (micStateRef.current === 'starting') {
       // Released while the mic was still opening: ask the in-flight launch
@@ -402,6 +430,11 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
         throw new Error('No audio captured.');
       }
 
+      benchmarkLogger.logEvent('AUDIO_RECORD_STOP', traceId, {
+        byteCount: totalSamplesRef.current * 2,
+        extraInfo: `samples=${totalSamplesRef.current}`,
+      });
+
       // 2. Combine all accumulated chunks into a single array
       const allSamples = new Float32Array(totalSamplesRef.current);
       let offset = 0;
@@ -421,16 +454,52 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
       if (!sttEngine.isInitialized()) {
         pushLog('[STT] Model not loaded yet — loading now (first use)…');
         setSttLoading(true);
+        const loadTraceId = benchmarkLogger.generateTraceId('stt-load');
+        benchmarkLogger.logEvent('STT_MODEL_LOAD_START', loadTraceId, {
+          extraInfo: 'lazy-default',
+        });
         try {
           await sttEngine.ensureInitialized();
+          benchmarkLogger.logEvent('STT_MODEL_LOAD_END', loadTraceId, {
+            extraInfo: 'success',
+          });
           pushLog('[STT] Speech model ready.');
+        } catch (err) {
+          benchmarkLogger.logEvent('STT_MODEL_LOAD_END', loadTraceId, {
+            extraInfo: `failure:${err instanceof Error ? err.message : String(err)}`,
+          });
+          throw err;
         } finally {
           refreshSttState();
         }
       }
+
+      benchmarkLogger.logEvent('STT_INFERENCE_START', traceId, {
+        byteCount: samplesArray.length * 4,
+        extraInfo: `duration_s=${(samplesArray.length / 16000).toFixed(2)}`,
+        metadata: {
+          sampleRateHz: 16000,
+          channels: 1,
+          audioDurationMs: (samplesArray.length / 16000) * 1000,
+          modelPath: sttEngine.getActiveModelPath() ?? 'unknown',
+        },
+      });
+
       const text = await sttEngine.transcribeSamples(samplesArray, 16000);
 
       const finalText = text.trim();
+      benchmarkLogger.logEvent('STT_INFERENCE_END', traceId, {
+        charCount: finalText.length,
+        extraInfo: finalText ? 'ok' : 'empty',
+        metadata: {
+          audioDurationMs: (samplesArray.length / 16000) * 1000,
+          sampleRateHz: 16000,
+          channels: 1,
+          outcome: finalText ? 'success' : 'empty',
+          modelPath: sttEngine.getActiveModelPath() ?? 'unknown',
+        },
+      });
+
       if (!finalText) {
         const msg = 'No speech detected.';
         pushLog(`[STT] Result: EMPTY — ${msg}`);
@@ -445,6 +514,9 @@ export function useVoiceMessage(): UseVoiceMessageReturn {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error('[useVoiceMessage] stopVoice failed:', msg);
+      benchmarkLogger.logEvent('BENCHMARK_FAILURE', traceId, {
+        extraInfo: `stt:${msg}`,
+      });
       pushLog(`[STT] Transcription FAILED: ${msg}`);
       setError(`Transcription failed: ${msg}`);
       refreshSttState();

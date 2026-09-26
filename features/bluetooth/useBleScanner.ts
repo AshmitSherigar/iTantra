@@ -6,6 +6,7 @@ import {
 } from 'react-native-bluetooth-ble';
 import { ensureBleScanPermissions } from './permissions';
 import { SERVICE_UUID } from './constants';
+import { benchmarkLogger } from '../benchmark/BenchmarkLogger';
 import {
   getDeviceDisplayName,
   isVaaniSetuDevice,
@@ -22,8 +23,11 @@ export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
   const [isScanning, setIsScanning] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const removeDeviceListenerRef = useRef<(() => void) | undefined>(undefined);
+  const scanTraceIdRef = useRef<string | null>(null);
+  const firstDeviceRef = useRef(false);
 
   const stopScanning = useCallback(async () => {
+    const traceId = scanTraceIdRef.current;
     try {
       await stopScan();
     } catch (error) {
@@ -36,8 +40,15 @@ export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
     }
 
     setIsScanning(false);
+    if (traceId) {
+      benchmarkLogger.logEvent('BLE_DISCOVERY_END', traceId, {
+        extraInfo: `unique_devices=${devices.length}`,
+        metadata: { foundAny: firstDeviceRef.current },
+      });
+      scanTraceIdRef.current = null;
+    }
     console.log('Scan stopped');
-  }, []);
+  }, [devices.length]);
 
   useEffect(() => {
     return () => {
@@ -65,6 +76,10 @@ export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
     }
 
     setDevices([]);
+    const traceId = benchmarkLogger.generateTraceId('ble-scan');
+    scanTraceIdRef.current = traceId;
+    firstDeviceRef.current = false;
+    benchmarkLogger.logEvent('BLE_DISCOVERY_START', traceId);
 
     if (removeDeviceListenerRef.current) {
       removeDeviceListenerRef.current();
@@ -79,6 +94,13 @@ export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
       // headphones/speakers/watches never appear in the list.
       if (!isVaaniSetuDevice(found, SERVICE_UUID)) {
         return;
+      }
+      if (!firstDeviceRef.current) {
+        firstDeviceRef.current = true;
+        benchmarkLogger.logEvent('BLE_DISCOVERY_END', traceId, {
+          extraInfo: 'first_matching_device_found',
+          metadata: { firstDevice: true },
+        });
       }
       console.log(
         'VaaniSetu device found:',
