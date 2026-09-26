@@ -75,8 +75,8 @@
         }
       ],
       "expo-asset",
-      "./plugins/withSherpaModelAssets",
-      "./plugins/withSherpaProguardRules",
+      "./plugins/withSosForegroundService",
+      "./plugins/withAndroidAppSize",
       "./plugins/withSosForegroundService",
       "./plugins/withAndroidAppSize",
       [
@@ -98,6 +98,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "306929bd-b59b-48c6-8841-036026b83299"
+      }
     }
   }
 }
