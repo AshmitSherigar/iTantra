@@ -1,86 +1,24 @@
-import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { useTheme } from '@/context/ThemeContext';
+import FloatingTabBar from '../../components/FloatingTabBar';
 
+/**
+ * Premium floating pill tab bar - glassmorphic blur + Reanimated indicator.
+ * Screens add bottom padding (~110px) so content clears the floating bar.
+ */
 export default function TabsLayout() {
-  const insets = useSafeAreaInsets();
-  const themeContext = useTheme() as any;
-  const colors = themeContext.colors ??
-    themeContext.theme?.colors ?? {
-      primary: '#007AFF',
-      textSecondary: '#8E8E93',
-      surface: '#FFFFFF',
-      border: '#E5E5EA',
-    };
-
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
-
-        tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.textSecondary,
-
-        tabBarStyle: {
-          height: 60 + insets.bottom,
-          paddingBottom: Math.max(insets.bottom, 6),
-
-          backgroundColor: colors.surface,
-          borderTopWidth: 1,
-          borderTopColor: colors.border,
-        },
-
-        tabBarLabelStyle: {
-          fontSize: 12,
-          fontWeight: '600',
-        },
-
-        tabBarIconStyle: {
-          marginTop: 0,
-        },
       }}
+      tabBar={(props) => <FloatingTabBar {...props} />}
     >
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Home',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="home-outline" size={size} color={color} />
-          ),
-        }}
-      />
-
-      <Tabs.Screen
-        name="bluetooth"
-        options={{
-          title: 'Bluetooth',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="bluetooth-outline" size={size} color={color} />
-          ),
-        }}
-      />
-
-      <Tabs.Screen
-        name="wifi"
-        options={{
-          title: 'WiFi',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="wifi-outline" size={size} color={color} />
-          ),
-        }}
-      />
-
-      <Tabs.Screen
-        name="settings"
-        options={{
-          title: 'Settings',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="settings-outline" size={size} color={color} />
-          ),
-        }}
-      />
+      <Tabs.Screen name="index" options={{ title: 'Home' }} />
+      <Tabs.Screen name="bluetooth" options={{ title: 'Bluetooth' }} />
+      <Tabs.Screen name="sos" options={{ title: 'SOS' }} />
+      <Tabs.Screen name="wifi" options={{ title: 'WiFi' }} />
+      <Tabs.Screen name="settings" options={{ title: 'Settings' }} />
     </Tabs>
   );
 }

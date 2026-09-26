@@ -6,7 +6,7 @@ import type { LanguageModel } from '@/features/models/languages';
 import { logger } from '@/utils/logger';
 
 type ModelApis = {
-  ensureSttReady: (path: string) => Promise<boolean>;
+  ensureSttReady: (path: string) => Promise<void>;
   releaseStt: () => Promise<void>;
   ensureTtsReady: (path: string) => Promise<void>;
   releaseTts: () => Promise<void>;

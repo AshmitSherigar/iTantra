@@ -20,6 +20,8 @@ export type StreamTts = {
   beginStream: () => void;
   pushText: (fresh: string) => void;
   endStream: () => void;
+  /** Drop buffered-but-unspoken stream text without speaking it. */
+  discardStream: () => void;
 };
 
 type ReassemblyState = {
@@ -102,13 +104,21 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
   }, []);
 
   const handleCompletedText = useCallback(
-    (text: string) => {
+    (text: string, opts?: { streamed?: boolean }) => {
+      const streamed = opts?.streamed === true;
       const broadcast = decodeBroadcast(text);
       if (broadcast) {
         // Mesh broadcast (homepage flood): shared de-dup lives in
         // broadcast.ts. emitBroadcast shows the Alert via subscribers AND
         // triggers the one-time relay to other nearby phones. Duplicates
         // and our own looped-back echoes return false → stay silent.
+        if (streamed) {
+          // Never speak broadcast JSON: drop any fragments buffered for
+          // TTS before detection instead of flushing them as a tail.
+          try {
+            ttsRef.current.discardStream();
+          } catch {}
+        }
         emitBroadcast(broadcast);
         return;
       }
@@ -117,15 +127,34 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
         // broadcast. Drop silently instead of speaking raw JSON gibberish
         // as if it were a 1-to-1 chat line.
         console.warn('Dropping corrupt broadcast-like payload');
+        if (streamed) {
+          try {
+            ttsRef.current.discardStream();
+          } catch {}
+        }
         return;
       }
       if (containsReplacementChar(text)) {
         console.warn('Dropping text with undecodable bytes');
+        if (streamed) {
+          try {
+            ttsRef.current.discardStream();
+          } catch {}
+        }
         return;
       }
 
       addMessage(text, 'other');
-      ttsRef.current.speakFullMessage(text);
+      if (streamed) {
+        // Already spoken incrementally while packets arrived (speakable
+        // chunks during streaming + the tail flushed by endStream below).
+        // Speaking the full text here as well repeats every received
+        // message twice — the reported double-speech bug.
+        ttsRef.current.endStream();
+      } else {
+        // Single-packet message: never streamed, so speak it once here.
+        ttsRef.current.speakFullMessage(text);
+      }
     },
     [addMessage, ttsRef],
   );
@@ -140,11 +169,13 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
       const joined = state.chunks.join('');
       const text = hexToText(joined);
       clearReassembly(sender);
-      ttsRef.current.endStream();
       if (text) {
-        handleCompletedText(text);
+        // Chunked message: its text was already fed to streaming TTS while
+        // packets arrived — handleCompletedText must NOT re-speak it.
+        handleCompletedText(text, { streamed: true });
       } else {
         console.warn('Discarding undecodable chunked message');
+        ttsRef.current.endStream();
       }
     },
     [clearReassembly, handleCompletedText, ttsRef],
@@ -231,6 +262,11 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
             // reach speech, even as partial fragments.
             if (looksLikeBroadcastJson(hexToText(joined) ?? '')) {
               state.suppressStream = true;
+              // Drop anything buffered for TTS before detection so it is
+              // never flushed as a spoken tail at END.
+              try {
+                ttsRef.current.discardStream();
+              } catch {}
             } else if (fresh) {
               ttsRef.current.pushText(fresh);
             }

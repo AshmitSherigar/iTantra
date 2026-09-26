@@ -1,74 +1,122 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
+  KeyboardAvoidingView,
+  Linking,
+  Platform,
   ScrollView,
   Text,
   TextInput,
   TouchableOpacity,
   View,
-  StyleSheet,
 } from 'react-native';
-import { FontSize, Radius, Spacing } from '@/constants/theme';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import * as Device from 'expo-device';
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
+import {
+  ArrowLeft,
+  Globe,
+  Megaphone,
+  Mic,
+  Send,
+  Square,
+  Trash2,
+  Volume2,
+  VolumeX,
+  Wifi as WifiIcon,
+  X,
+} from 'lucide-react-native';
 import { router } from 'expo-router';
-import { useTheme } from '@/context/ThemeContext';
-import { useLanguage } from '@/context/LanguageContext';
-import { isLanguageInstalled, type LanguageModel } from '@/features/models/languages';
-import { useVoiceMessage } from '@/features/audio/useVoiceMessage';
-import { useAutoSpeak } from '@/features/tts/useAutoSpeak';
-import { logger } from '@/utils/logger';
-import { useWifiTransport } from '../../transport/useWifiTransport';
 
-type ChatBubble = {
-  id: string;
-  text: string;
-  sender: 'me' | 'other';
-};
+import { useTheme } from '../../context/ThemeContext';
+import { useLanguage } from '../../context/LanguageContext';
+import { isLanguageInstalled } from '../../features/models/languages';
+import { useVoiceMessage } from '../../features/audio/useVoiceMessage';
+import GlassCard from '@/components/ui/GlassCard';
+import TiltDeck from '@/components/ui/TiltDeck';
+import CircleButton from '@/components/ui/CircleButton';
+import ScreenHeader from '@/components/ui/ScreenHeader';
+import AnimatedListItem from '@/components/ui/AnimatedListItem';
+import SectionHeader from '@/components/ui/SectionHeader';
+import { showAppAlert } from '@/components/ui/AppModal';
+import { useKeyboardHeight } from '@/components/ui/useKeyboardHeight';
+import { Shadows, Spacing, Typography } from '../../constants/theme';
+import { styles } from './bluetooth.styles';
+import {
+  checkWifiPermissions,
+  ensureWifiPermissions,
+  showWifiPermissionDeniedAlert,
+  useWifiChat,
+} from '../../features/wifi';
+import { useWifiSpeech } from '../../features/wifi/useWifiSpeech';
 
-function promptInstallLanguage(selectedLanguage: LanguageModel) {
-  Alert.alert(
-    'Language model not installed',
-    `The "${selectedLanguage.label}" voice models aren't installed yet. Install it or switch to an installed language to connect.`,
-    [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Install',
-        onPress: () =>
-          Alert.alert(
-            'Install language model',
-            `"${selectedLanguage.label}" model download isn't available yet.`,
-            [{ text: 'OK' }],
-          ),
-      },
-      {
-        text: 'View Languages',
-        onPress: () => router.push('/settings/language'),
-      },
-    ],
-  );
-}
-
+/**
+ * WiFi LAN chat screen - premium redesign, logic preserved.
+ */
 export default function WifiScreen() {
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
+  // Clearance above the floating tab bar + Android system buttons.
+  const chatBottomPad = 70 + Math.max(insets.bottom, 12) + 16;
+  // Edge-to-edge Android won't resize for the keyboard - lift manually.
+  const kbHeight = useKeyboardHeight();
+  const scrollRef = useRef<ScrollView>(null);
+  useEffect(() => {
+    if (kbHeight <= 0) return;
+    const t = setTimeout(() => {
+      scrollRef.current?.scrollToEnd({ animated: true });
+    }, 60);
+    return () => clearTimeout(t);
+  }, [kbHeight]);
   const { selectedLanguage } = useLanguage();
-  const languageInstalled = isLanguageInstalled(selectedLanguage);
-  const handlePromptInstall = useCallback(
-    () => promptInstallLanguage(selectedLanguage),
-    [selectedLanguage],
+  const [displayName, setDisplayName] = useState(
+    () => Device.deviceName?.trim() || Device.modelName?.trim() || 'VaaniSetu',
   );
+  const [deviceId] = useState(
+    () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+  );
+  const [chatInput, setChatInput] = useState('');
+  const [broadcastInput, setBroadcastInput] = useState('');
+  const [isBroadcasting, setIsBroadcasting] = useState(false);
+  const [chatPeer, setChatPeer] = useState<string | null>(null);
+  const [permError, setPermError] = useState<string | null>(null);
+  const [permNeedsSettings, setPermNeedsSettings] = useState(false);
+  const [hasPermission, setHasPermission] = useState(false);
+  const blockedRef = useRef(new Set<string>());
+  const dialedRef = useRef(new Set<string>());
 
-  const [deviceName] = useState(
-    () => `Phone-${Math.floor(Math.random() * 1000)}`,
-  );
-  const [role, setRole] = useState<'host' | 'client' | null>(null);
-  const [connectingAddress, setConnectingAddress] = useState<string | null>(
-    null,
-  );
-  const [message, setMessage] = useState('');
-  const [chatMessages, setChatMessages] = useState<ChatBubble[]>([]);
-  const processedIncomingCount = useRef(0);
+  useEffect(() => {
+    let cancelled = false;
+    void checkWifiPermissions().then((ok) => {
+      if (!cancelled) setHasPermission(ok);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const {
+    status,
+    peers,
+    connectedAddresses,
+    isConnected,
+    messages,
+    ssid,
+    error: wifiError,
+    startHosting,
+    connectTo,
+    disconnectPeer,
+    disconnectAll,
+    sendToPeer,
+    broadcast,
+    clearMessages,
+  } = useWifiChat({
+    deviceName: displayName.trim() || 'VaaniSetu',
+    deviceId,
+    lang: selectedLanguage.id,
+  });
 
   const {
     isRecording: isVoiceRecording,
@@ -76,520 +124,730 @@ export default function WifiScreen() {
     partialText,
     error: voiceError,
     sttReady,
-    sttLoading,
     sttError,
     startVoice,
     stopVoice,
     ensureSttReady,
-    releaseStt,
   } = useVoiceMessage();
 
   const {
     enabled: ttsEnabled,
     setEnabled: setTtsEnabled,
-    isReady: ttsReady,
-    isLoading: ttsLoading,
-    error: ttsError,
     isSpeaking: ttsSpeaking,
+    isLoadingVoice: ttsLoading,
+    spokenLangLabel: ttsLangLabel,
+    speakMessage,
     stop: stopTts,
-    speakFullMessage,
-    ensureReady: ensureTtsReady,
-    release: releaseTts,
-  } = useAutoSpeak(true, { autoInit: false });
+  } = useWifiSpeech(true);
 
-  const speakFullMessageRef = useRef(speakFullMessage);
+  const speakRef = useRef(speakMessage);
   useEffect(() => {
-    speakFullMessageRef.current = speakFullMessage;
-  }, [speakFullMessage]);
-
-  const { status, messages, peers, startHosting, connectTo, sendText, disconnect } =
-    useWifiTransport(deviceName);
-
-  const isConnected = status === 'connected';
-
+    speakRef.current = speakMessage;
+  }, [speakMessage]);
+  const seenIdsRef = useRef(new Set<string>());
   useEffect(() => {
-    if (messages.length <= processedIncomingCount.current) return;
-    const newOnes = messages.slice(processedIncomingCount.current);
-    processedIncomingCount.current = messages.length;
-    const withText = newOnes.filter((m) => m.text);
-    setChatMessages((prev) => [
-      ...prev,
-      ...withText.map((m) => ({
-        id: `other-${m.seq}-${m.ts}`,
-        text: m.text!,
-        sender: 'other' as const,
-      })),
-    ]);
-    withText.forEach((m) => speakFullMessageRef.current(m.text!));
+    const last = messages[messages.length - 1];
+    if (!last || last.sender !== 'other' || seenIdsRef.current.has(last.id))
+      return;
+    seenIdsRef.current.add(last.id);
+    speakRef.current({ text: last.text, lang: last.lang });
   }, [messages]);
 
-  useEffect(() => {
-    if (isConnected) {
-      setConnectingAddress(null);
-    }
-    if (status === 'idle' || status === 'disconnected') {
-      setRole(null);
-      processedIncomingCount.current = 0;
-      setChatMessages([]);
-    }
-  }, [status, isConnected]);
+  const languageInstalled = isLanguageInstalled(selectedLanguage);
 
-  useEffect(() => {
-    if (!isConnected) return;
-    if (!languageInstalled) {
-      promptInstallLanguage(selectedLanguage);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        await ensureSttReady(selectedLanguage.sttAssetPath!);
-      } catch (e) {
-        logger.warn('Wifi', 'STT load failed', e);
+  const handleConnectAllPress = useCallback(async () => {
+    if (!(hasPermission || (await checkWifiPermissions()))) {
+      const res = await ensureWifiPermissions();
+      if (!res.granted) {
+        setPermError(
+          'Location permission is required to discover phones on the same WiFi network.',
+        );
+        setPermNeedsSettings(res.needsSettings);
+        showWifiPermissionDeniedAlert(res);
         return;
       }
-      if (cancelled) return;
-      try {
-        await ensureTtsReady(selectedLanguage.ttsAssetPath!);
-      } catch (e) {
-        logger.warn('Wifi', 'TTS load failed', e);
-      }
-    })();
-    return () => {
-      cancelled = true;
-      try {
-        stopTts();
-      } catch {}
-      void releaseStt();
-      void releaseTts();
-    };
-  }, [
-    isConnected,
-    selectedLanguage,
-    languageInstalled,
-    ensureSttReady,
-    ensureTtsReady,
-    releaseStt,
-    releaseTts,
-    stopTts,
-  ]);
-
-  const handleHostPress = useCallback(() => {
-    setRole('host');
+      setHasPermission(true);
+    }
+    setPermError(null);
+    setPermNeedsSettings(false);
     startHosting();
-  }, [startHosting]);
+    blockedRef.current.clear();
+    for (const peer of peers) {
+      if (connectedAddresses.includes(peer.address)) continue;
+      dialedRef.current.add(peer.address);
+      connectTo(peer.address);
+    }
+  }, [hasPermission, startHosting, peers, connectedAddresses, connectTo]);
 
   const handleConnectPress = useCallback(
-    (address: string) => {
-      setRole('client');
-      setConnectingAddress(address);
+    async (address: string) => {
+      if (!(hasPermission || (await checkWifiPermissions()))) {
+        const res = await ensureWifiPermissions();
+        if (!res.granted) {
+          setPermError('Location permission is required to discover phones.');
+          setPermNeedsSettings(res.needsSettings);
+          showWifiPermissionDeniedAlert(res);
+          return;
+        }
+        setHasPermission(true);
+      }
+      setPermError(null);
+      setPermNeedsSettings(false);
+      blockedRef.current.delete(address);
+      dialedRef.current.add(address);
       connectTo(address);
     },
-    [connectTo],
+    [connectTo, hasPermission],
   );
 
-  const handleDisconnectPress = useCallback(() => {
-    disconnect();
-    setRole(null);
-  }, [disconnect]);
-
-  const sendMessage = useCallback(() => {
-    const trimmed = message.trim();
-    if (!trimmed) return;
-    const sent = sendText(trimmed);
-    if (sent) {
-      setChatMessages((prev) => [
-        ...prev,
-        { id: `me-${sent.seq}-${sent.ts}`, text: trimmed, sender: 'me' },
-      ]);
+  useEffect(() => {
+    if (!hasPermission) return;
+    if (status === 'idle') return;
+    const live = new Set(peers.map((p) => p.address));
+    for (const addr of [...dialedRef.current]) {
+      if (!live.has(addr) && !connectedAddresses.includes(addr)) {
+        dialedRef.current.delete(addr);
+      }
     }
-    setMessage('');
-  }, [message, sendText]);
+    for (const peer of peers) {
+      if (connectedAddresses.includes(peer.address)) continue;
+      if (blockedRef.current.has(peer.address)) continue;
+      if (dialedRef.current.has(peer.address)) continue;
+      if (!(deviceId < peer.deviceId)) continue;
+      dialedRef.current.add(peer.address);
+      connectTo(peer.address);
+    }
+  }, [peers, connectedAddresses, hasPermission, status, deviceId, connectTo]);
+
+  const handleDropPeer = useCallback(
+    (address: string) => {
+      blockedRef.current.add(address);
+      dialedRef.current.delete(address);
+      if (chatPeer === address) {
+        try {
+          stopTts();
+        } catch {}
+        setChatPeer(null);
+        setChatInput('');
+      }
+      disconnectPeer(address);
+    },
+    [chatPeer, disconnectPeer, stopTts],
+  );
+
+  const handleDisconnectAll = useCallback(() => {
+    for (const addr of connectedAddresses) blockedRef.current.add(addr);
+    dialedRef.current.clear();
+    try {
+      stopTts();
+    } catch {}
+    setChatPeer(null);
+    disconnectAll();
+  }, [connectedAddresses, disconnectAll, stopTts]);
+
+  const handleOpenChat = useCallback((address: string) => {
+    setChatPeer(address);
+  }, []);
+
+  const handleBackFromChat = useCallback(() => {
+    try {
+      stopTts();
+    } catch {}
+    setChatPeer(null);
+    setChatInput('');
+  }, [stopTts]);
+
+  const handleDisconnectChatPeer = useCallback(() => {
+    try {
+      stopTts();
+    } catch {}
+    if (chatPeer) {
+      blockedRef.current.add(chatPeer);
+      dialedRef.current.delete(chatPeer);
+      disconnectPeer(chatPeer);
+    }
+    setChatPeer(null);
+    setChatInput('');
+  }, [chatPeer, disconnectPeer, stopTts]);
+
+  const sendChatMessage = useCallback(() => {
+    if (!chatPeer || !chatInput.trim()) return;
+    sendToPeer(chatPeer, chatInput);
+    setChatInput('');
+  }, [chatPeer, chatInput, sendToPeer]);
+
+  const handleClearMessages = useCallback(() => {
+    if (messages.length === 0) return;
+    void showAppAlert(
+      'Clear messages?',
+      'This clears all WiFi messages, including past broadcasts.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Clear', style: 'destructive', onPress: clearMessages },
+      ],
+    );
+  }, [messages.length, clearMessages]);
+
+  const handleBroadcast = useCallback(async () => {
+    const text = broadcastInput.trim();
+    if (!text || isBroadcasting) return;
+    setIsBroadcasting(true);
+    try {
+      const res = broadcast(text);
+      if (res.attempted === 0) {
+        await showAppAlert(
+          'No WiFi connections yet',
+          'No phones joined yet - they auto-join a few seconds after opening this tab on the same WiFi. If nobody appears, check the device list below.',
+          [{ text: 'OK' }],
+        );
+        return;
+      }
+      setBroadcastInput('');
+    } finally {
+      setIsBroadcasting(false);
+    }
+  }, [broadcastInput, isBroadcasting, broadcast]);
 
   const handleVoiceToggle = useCallback(async () => {
     if (!isVoiceRecording && !languageInstalled) {
-      promptInstallLanguage(selectedLanguage);
+      await showAppAlert(
+        'Language model not installed',
+        `Install "${selectedLanguage.label}" models or switch language to use voice.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'View Languages',
+            onPress: () => router.push('/settings/language'),
+          },
+        ],
+      );
       return;
     }
     try {
       if (isVoiceRecording) {
         const text = await stopVoice();
-        if (text) {
-          const sent = sendText(text);
-          if (sent) {
-            setChatMessages((prev) => [
-              ...prev,
-              { id: `me-${sent.seq}-${sent.ts}`, text, sender: 'me' },
-            ]);
+        if (!text) return;
+        if (chatPeer) {
+          sendToPeer(chatPeer, text);
+        } else {
+          const res = broadcast(text);
+          if (res.attempted === 0) {
+            await showAppAlert(
+              'No WiFi connections yet',
+              'Nobody joined yet - phones auto-join seconds after opening this tab on the same WiFi.',
+              [{ text: 'OK' }],
+            );
           }
         }
       } else {
         try {
           stopTts();
         } catch {}
+        if (!sttReady)
+          await ensureSttReady(selectedLanguage.sttAssetPath ?? undefined);
         await startVoice();
       }
     } catch (e) {
-      logger.warn('Wifi', 'Voice toggle failed', e);
+      console.warn('[WiFi] voice toggle failed', e);
     }
   }, [
     isVoiceRecording,
-    selectedLanguage,
-    sendText,
-    startVoice,
-    stopTts,
-    stopVoice,
     languageInstalled,
+    selectedLanguage,
+    stopVoice,
+    chatPeer,
+    sendToPeer,
+    broadcast,
+    stopTts,
+    sttReady,
+    ensureSttReady,
+    startVoice,
   ]);
+
+  const statusLabel =
+    status === 'connected'
+      ? `Connected • ${connectedAddresses.length}`
+      : status === 'listening'
+        ? 'Hosting • waiting'
+        : status === 'connecting'
+          ? 'Connecting...'
+          : status === 'disconnected'
+            ? 'Disconnected'
+            : 'Idle';
+
+  const chatPeerName =
+    (chatPeer && peers.find((p) => p.address === chatPeer)?.name) ??
+    chatPeer ??
+    '';
+  const chatPeerConnected = chatPeer
+    ? connectedAddresses.includes(chatPeer)
+    : false;
+
+  const chatMessages = useMemo(() => {
+    if (!chatPeer) return [];
+    return messages.filter((m) => m.peerAddress === chatPeer);
+  }, [messages, chatPeer]);
+
+  const broadcastMessages = useMemo(() => {
+    return messages.filter((m) => m.peerAddress === 'broadcast').slice(-20);
+  }, [messages]);
 
   return (
     <SafeAreaView
       style={[styles.safeArea, { backgroundColor: colors.background }]}
-      edges={['top', 'bottom']}
+      edges={['top']}
     >
-      <View
-        style={[
-          styles.header,
-          { backgroundColor: colors.surface, borderBottomColor: colors.border },
-        ]}
-      >
-        <View>
-          <Text style={[styles.headerLabel, { color: colors.textSecondary }]}>
-            VaaniSetu
-          </Text>
-        </View>
-
-        <View
-          style={[
-            styles.statusBadge,
-            {
-              backgroundColor: isConnected
-                ? '#DCFCE7'
-                : colors.inputBackground,
-            },
-          ]}
-        >
-          <Text
-            style={[
-              styles.statusText,
-              { color: isConnected ? colors.success : colors.textSecondary },
-            ]}
-          >
-            {isConnected
-              ? 'Connected'
-              : status === 'listening'
-                ? 'Listening'
-                : status === 'connecting'
-                  ? 'Connecting…'
-                  : 'Not started'}
-          </Text>
-        </View>
+      <View style={{ paddingHorizontal: Spacing.lg, paddingTop: Spacing.md }}>
+        <ScreenHeader
+          title={chatPeer ? chatPeerName || 'WiFi chat' : 'WiFi Chat'}
+          subtitle={
+            chatPeer
+              ? chatPeerConnected
+                ? `Private • ${selectedLanguage.label}`
+                : 'Not connected - reconnect from list'
+              : ssid
+                ? `${statusLabel} • ${ssid}`
+                : `${statusLabel} • same WiFi, no internet`
+          }
+          left={
+            chatPeer ? (
+              <CircleButton
+                onPress={handleBackFromChat}
+                accessibilityLabel="Back to devices"
+              >
+                <ArrowLeft size={20} color={colors.text} />
+              </CircleButton>
+            ) : (
+              <CircleButton
+                onPress={handleConnectAllPress}
+                accessibilityLabel="Connect all devices"
+              >
+                <WifiIcon size={20} color={colors.text} />
+              </CircleButton>
+            )
+          }
+          right={
+            chatPeer ? (
+              <CircleButton
+                onPress={handleDisconnectChatPeer}
+                accessibilityLabel="Disconnect chat"
+              >
+                <X size={20} color={colors.text} />
+              </CircleButton>
+            ) : (
+              <CircleButton
+                onPress={() => router.push('/settings/language')}
+                accessibilityLabel="Voice language"
+              >
+                <Globe size={20} color={colors.text} />
+              </CircleButton>
+            )
+          }
+        />
       </View>
 
-      {!isConnected ? (
+      {chatPeer === null ? (
         <ScrollView
           style={styles.flex}
           contentContainerStyle={[
             styles.scrollContent,
-            { paddingBottom: Spacing.xl },
+            { paddingBottom: 130, paddingHorizontal: Spacing.lg },
           ]}
           keyboardShouldPersistTaps="handled"
         >
-          <View style={styles.section}>
-            <Text
-              style={[
-                styles.sectionDescription,
-                { color: colors.textSecondary },
-              ]}
-            >
-              Devices on the same WiFi network discover each other
-              automatically. Tap Host on one phone, then Connect from the
-              other.
-            </Text>
-            <Text style={[styles.nameLabel, { color: colors.textSecondary }]}>
-              YOUR DEVICE NAME
-            </Text>
-            <Text style={[styles.advertisedAs, { color: colors.text }]}>
-              {deviceName}
-            </Text>
-
-            <TouchableOpacity
-              style={[
-                styles.primaryButton,
-                {
-                  backgroundColor:
-                    status === 'listening'
-                      ? colors.textSecondary
-                      : colors.primary,
-                  opacity: status === 'listening' ? 0.7 : 1,
-                },
-              ]}
-              onPress={handleHostPress}
-              disabled={status === 'listening'}
-              activeOpacity={0.82}
-            >
-              {status === 'listening' ? (
-                <ActivityIndicator
-                  color="#FFFFFF"
-                  size="small"
-                  style={styles.buttonIcon}
-                />
-              ) : (
-                <Ionicons
-                  name="wifi"
-                  size={18}
-                  color="#FFFFFF"
-                  style={styles.buttonIcon}
-                />
-              )}
-              <Text style={styles.primaryButtonText}>
-                {status === 'listening'
-                  ? 'Listening for connections…'
-                  : 'Host'}
+          <AnimatedListItem index={0}>
+            <TiltDeck>
+              <Text
+                style={[Typography.overline, { color: colors.textSecondary }]}
+              >
+                Device name
               </Text>
-            </TouchableOpacity>
-
-            {status === 'listening' ? (
-              <TouchableOpacity
+              <TextInput
+                value={displayName}
+                onChangeText={(t) => setDisplayName(t.slice(0, 32))}
+                placeholder={Device.modelName ?? 'Name'}
+                placeholderTextColor={colors.textSecondary}
+                maxLength={32}
                 style={[
-                  styles.stopButton,
-                  { backgroundColor: colors.inputBackground },
-                ]}
-                onPress={handleDisconnectPress}
-                activeOpacity={0.82}
-              >
-                <Text style={[styles.stopButtonText, { color: colors.text }]}>
-                  Stop hosting
-                </Text>
-              </TouchableOpacity>
-            ) : null}
-          </View>
-
-          <View style={styles.section}>
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>
-              Language
-            </Text>
-            <Text
-              style={[
-                styles.sectionDescription,
-                { color: colors.textSecondary },
-              ]}
-            >
-              Voice models for the selected language load when a chat opens.
-              Only that language stays in memory.
-            </Text>
-            <View
-              style={[
-                styles.deviceCard,
-                { backgroundColor: colors.surface, borderColor: colors.border },
-              ]}
-            >
-              <View style={styles.deviceInfo}>
-                <Text style={[styles.deviceName, { color: colors.text }]}>
-                  {selectedLanguage.label}
-                </Text>
-                <Text
-                  style={[styles.deviceId, { color: colors.textSecondary }]}
-                >
-                  {languageInstalled
-                    ? 'Installed • works offline'
-                    : 'Not installed'}
-                </Text>
-              </View>
-              <TouchableOpacity
-                style={[
-                  styles.connectButton,
-                  { backgroundColor: colors.primary },
-                ]}
-                onPress={() => router.push('/settings/language')}
-                activeOpacity={0.82}
-              >
-                <Text style={styles.connectButtonText}>Change</Text>
-              </TouchableOpacity>
-            </View>
-            {!languageInstalled ? (
-              <TouchableOpacity
-                style={[
-                  styles.stopButton,
-                  { backgroundColor: colors.inputBackground, marginTop: 8 },
-                ]}
-                onPress={handlePromptInstall}
-                activeOpacity={0.82}
-              >
-                <Text style={[styles.stopButtonText, { color: colors.text }]}>
-                  Install “{selectedLanguage.label}” models
-                </Text>
-              </TouchableOpacity>
-            ) : null}
-          </View>
-
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <View>
-                <Text style={[styles.sectionTitle, { color: colors.text }]}>
-                  Nearby VaaniSetu Devices
-                </Text>
-                <Text
-                  style={[styles.deviceCount, { color: colors.textSecondary }]}
-                >
-                  {peers.length} device{peers.length === 1 ? '' : 's'} found
-                </Text>
-              </View>
-            </View>
-
-            {peers.length === 0 ? (
-              <View
-                style={[
-                  styles.emptyState,
+                  premium.nameInput,
                   {
-                    backgroundColor: colors.surface,
-                    borderColor: colors.border,
+                    backgroundColor: colors.inputBackground,
+                    color: colors.text,
+                    borderColor: colors.glassBorder,
                   },
                 ]}
+              />
+              <TouchableOpacity
+                style={[
+                  premium.primaryBtn,
+                  { backgroundColor: colors.text },
+                  Shadows.card,
+                ]}
+                onPress={handleConnectAllPress}
+                activeOpacity={0.85}
               >
-                <Ionicons
-                  name="wifi-outline"
-                  size={32}
-                  color={colors.textSecondary}
-                  style={{ marginBottom: Spacing.sm }}
-                />
-                <Text style={[styles.emptyStateTitle, { color: colors.text }]}>
-                  No VaaniSetu devices found
-                </Text>
+                <WifiIcon size={18} color={colors.background} />
                 <Text
-                  style={[
-                    styles.emptyStateText,
-                    { color: colors.textSecondary },
-                  ]}
+                  style={[premium.primaryBtnText, { color: colors.background }]}
                 >
-                  Only phones running this app on the same WiFi network appear
-                  here.
+                  Connect All ({peers.length} found)
                 </Text>
-              </View>
-            ) : (
-              <View style={styles.deviceList}>
-                {peers.map((peer) => (
-                  <View
-                    key={peer.address}
+              </TouchableOpacity>
+              {permError || wifiError ? (
+                <View style={{ marginTop: 8 }}>
+                  <Text style={[premium.errorText, { color: colors.error }]}>
+                    {permError ?? wifiError}
+                  </Text>
+                  {permNeedsSettings ? (
+                    <TouchableOpacity
+                      onPress={() => Linking.openSettings()}
+                      activeOpacity={0.8}
+                    >
+                      <Text
+                        style={[premium.linkText, { color: colors.primary }]}
+                      >
+                        Open system settings
+                      </Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              ) : null}
+            </TiltDeck>
+          </AnimatedListItem>
+
+          <View style={{ marginTop: Spacing.lg }}>
+            <SectionHeader
+              overline={`Broadcast • ${connectedAddresses.length}`}
+              actionLabel={broadcastMessages.length > 0 ? 'Clear' : undefined}
+              onAction={handleClearMessages}
+            />
+            <AnimatedListItem index={1}>
+              <TiltDeck>
+                <TouchableOpacity
+                  style={[
+                    premium.hearRow,
+                    {
+                      backgroundColor: ttsEnabled
+                        ? colors.primaryMuted
+                        : colors.inputBackground,
+                    },
+                  ]}
+                  onPress={() => setTtsEnabled(!ttsEnabled)}
+                  activeOpacity={0.85}
+                >
+                  {ttsEnabled ? (
+                    <Volume2 size={16} color={colors.primary} />
+                  ) : (
+                    <VolumeX size={16} color={colors.textSecondary} />
+                  )}
+                  <Text
                     style={[
-                      styles.deviceCard,
+                      premium.hearText,
                       {
-                        backgroundColor: colors.surface,
-                        borderColor: colors.border,
+                        color: ttsEnabled
+                          ? colors.primary
+                          : colors.textSecondary,
                       },
                     ]}
                   >
-                    <View style={styles.deviceInfo}>
-                      <Text
-                        style={[styles.deviceName, { color: colors.text }]}
-                        numberOfLines={1}
-                      >
-                        {peer.name}
-                      </Text>
-                      <Text
+                    {ttsEnabled ? 'Hear incoming ON' : 'Hear incoming OFF'}
+                  </Text>
+                  {ttsEnabled && (ttsLoading || ttsSpeaking) ? (
+                    <Text
+                      style={[
+                        Typography.caption,
+                        { color: colors.textSecondary },
+                      ]}
+                    >
+                      {ttsLoading
+                        ? 'Loading...'
+                        : `Speaking${ttsLangLabel ? ` • ${ttsLangLabel}` : ''}...`}
+                    </Text>
+                  ) : null}
+                </TouchableOpacity>
+                <View style={premium.composer}>
+                  <TextInput
+                    value={broadcastInput}
+                    onChangeText={setBroadcastInput}
+                    placeholder="Broadcast for help..."
+                    placeholderTextColor={colors.textSecondary}
+                    style={[
+                      premium.input,
+                      {
+                        backgroundColor: colors.inputBackground,
+                        color: colors.text,
+                      },
+                    ]}
+                    multiline
+                    editable={!isVoiceRecording && !isTranscribing}
+                  />
+                  <TouchableOpacity
+                    style={[
+                      premium.circleBtn,
+                      {
+                        backgroundColor: isVoiceRecording
+                          ? colors.error
+                          : colors.inputBackground,
+                      },
+                    ]}
+                    onPress={handleVoiceToggle}
+                    disabled={isTranscribing}
+                    activeOpacity={0.85}
+                  >
+                    {isTranscribing ? (
+                      <ActivityIndicator size="small" color={colors.primary} />
+                    ) : isVoiceRecording ? (
+                      <Square size={18} color="#FFF" fill="#FFF" />
+                    ) : (
+                      <Mic size={20} color={colors.primary} />
+                    )}
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      premium.circleBtn,
+                      {
+                        backgroundColor:
+                          broadcastInput.trim() && !isBroadcasting
+                            ? '#CF5C36'
+                            : colors.inputBackground,
+                      },
+                    ]}
+                    disabled={
+                      !broadcastInput.trim() ||
+                      isBroadcasting ||
+                      isVoiceRecording ||
+                      isTranscribing
+                    }
+                    onPress={handleBroadcast}
+                    activeOpacity={0.85}
+                  >
+                    {isBroadcasting ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <Megaphone
+                        size={18}
+                        color={
+                          broadcastInput.trim()
+                            ? '#FFFFFF'
+                            : colors.textSecondary
+                        }
+                      />
+                    )}
+                  </TouchableOpacity>
+                </View>
+                {(isVoiceRecording || isTranscribing) && (
+                  <Text
+                    style={[
+                      Typography.caption,
+                      { color: colors.textSecondary, marginTop: 6 },
+                    ]}
+                  >
+                    {isVoiceRecording
+                      ? 'Recording... tap mic to stop & broadcast'
+                      : 'Transcribing...'}
+                    {isVoiceRecording && partialText ? ` ${partialText}` : ''}
+                  </Text>
+                )}
+                {broadcastMessages.length > 0 && (
+                  <View style={{ marginTop: 10, gap: 8 }}>
+                    {broadcastMessages.map((m) => (
+                      <View
+                        key={m.id}
                         style={[
-                          styles.deviceId,
-                          { color: colors.textSecondary },
+                          styles.messageRow,
+                          m.sender === 'me'
+                            ? styles.messageRowMe
+                            : styles.messageRowOther,
                         ]}
                       >
-                        {peer.address}
-                      </Text>
-                    </View>
-
-                    <TouchableOpacity
-                      style={[
-                        styles.connectButton,
-                        { backgroundColor: colors.primary },
-                      ]}
-                      disabled={connectingAddress !== null}
-                      onPress={() => handleConnectPress(peer.address)}
-                      activeOpacity={0.82}
-                    >
-                      {connectingAddress === peer.address ? (
-                        <ActivityIndicator color="#FFFFFF" size="small" />
-                      ) : (
-                        <Text style={styles.connectButtonText}>Connect</Text>
-                      )}
-                    </TouchableOpacity>
+                        <View
+                          style={[
+                            styles.messageBubble,
+                            m.sender === 'me'
+                              ? [
+                                  styles.messageBubbleMe,
+                                  { backgroundColor: '#CF5C36' },
+                                ]
+                              : [
+                                  styles.messageBubbleOther,
+                                  {
+                                    backgroundColor: colors.inputBackground,
+                                    borderColor: colors.glassBorder,
+                                  },
+                                ],
+                          ]}
+                        >
+                          {m.sender === 'other' ? (
+                            <Text
+                              style={{
+                                fontSize: 11,
+                                color: colors.textSecondary,
+                                marginBottom: 2,
+                              }}
+                            >
+                              {m.peerName}
+                            </Text>
+                          ) : null}
+                          <Text
+                            style={[
+                              styles.messageText,
+                              m.sender === 'me'
+                                ? styles.messageTextMe
+                                : [
+                                    styles.messageTextOther,
+                                    { color: colors.text },
+                                  ],
+                            ]}
+                          >
+                            {m.text}
+                          </Text>
+                        </View>
+                      </View>
+                    ))}
                   </View>
-                ))}
+                )}
+              </TiltDeck>
+            </AnimatedListItem>
+          </View>
+
+          <View style={{ marginTop: Spacing.lg }}>
+            <SectionHeader
+              overline={`Same-WiFi • ${peers.length} found · ${connectedAddresses.length} connected`}
+              actionLabel={isConnected ? 'Disconnect all' : undefined}
+              onAction={handleDisconnectAll}
+            />
+            {peers.length === 0 ? (
+              <GlassCard style={premium.empty}>
+                <WifiIcon size={30} color={colors.textSecondary} />
+                <Text
+                  style={[Typography.h3, { color: colors.text, marginTop: 8 }]}
+                >
+                  No devices
+                </Text>
+                <Text
+                  style={[
+                    Typography.caption,
+                    {
+                      color: colors.textSecondary,
+                      textAlign: 'center',
+                      marginTop: 4,
+                    },
+                  ]}
+                >
+                  Join same WiFi, open this tab, tap Connect All.
+                </Text>
+              </GlassCard>
+            ) : (
+              <View style={{ gap: 10 }}>
+                {peers.map((peer, i) => {
+                  const connected = connectedAddresses.includes(peer.address);
+                  return (
+                    <AnimatedListItem key={peer.address} index={i}>
+                      <GlassCard>
+                        <View style={premium.rowBetween}>
+                          <View style={{ flex: 1, marginRight: 10 }}>
+                            <Text
+                              style={[Typography.h3, { color: colors.text }]}
+                              numberOfLines={1}
+                            >
+                              {peer.name}
+                              {connected ? ' • connected' : ''}
+                            </Text>
+                            <Text
+                              style={[
+                                premium.mono,
+                                { color: colors.textSecondary },
+                              ]}
+                            >
+                              {peer.address}:{peer.tcpPort}
+                            </Text>
+                          </View>
+                          {connected ? (
+                            <View style={{ flexDirection: 'row', gap: 8 }}>
+                              <TouchableOpacity
+                                style={[
+                                  premium.miniBtn,
+                                  { backgroundColor: colors.text },
+                                ]}
+                                onPress={() => handleOpenChat(peer.address)}
+                                activeOpacity={0.85}
+                              >
+                                <Text
+                                  style={[
+                                    premium.miniBtnText,
+                                    { color: colors.background },
+                                  ]}
+                                >
+                                  Chat
+                                </Text>
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={[
+                                  premium.miniBtn,
+                                  { backgroundColor: colors.error },
+                                ]}
+                                onPress={() => handleDropPeer(peer.address)}
+                                activeOpacity={0.85}
+                              >
+                                <Text style={premium.miniBtnText}>Drop</Text>
+                              </TouchableOpacity>
+                            </View>
+                          ) : (
+                            <TouchableOpacity
+                              style={[
+                                premium.miniBtn,
+                                { backgroundColor: '#CF5C36' },
+                              ]}
+                              onPress={() => handleConnectPress(peer.address)}
+                              activeOpacity={0.85}
+                            >
+                              <Text
+                                style={[
+                                  premium.miniBtnText,
+                                  { color: colors.background },
+                                ]}
+                              >
+                                Connect
+                              </Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      </GlassCard>
+                    </AnimatedListItem>
+                  );
+                })}
               </View>
             )}
           </View>
         </ScrollView>
       ) : (
-        <View style={styles.flex}>
-          <View
-            style={[
-              styles.connectionBar,
-              {
-                backgroundColor: colors.surface,
-                borderBottomColor: colors.border,
-              },
-            ]}
-          >
-            <View style={styles.connectionInfo}>
-              <View
-                style={[
-                  styles.connectedDot,
-                  { backgroundColor: colors.success },
-                ]}
-              />
-              <View>
-                <Text style={[styles.connectedTitle, { color: colors.text }]}>
-                  Connected
-                </Text>
-                <Text
-                  style={[
-                    styles.connectedRole,
-                    { color: colors.textSecondary },
-                  ]}
-                >
-                  {role === 'host' ? 'Host' : 'Client'} •{' '}
-                  {selectedLanguage.label}
-                </Text>
-              </View>
-            </View>
-
-            <TouchableOpacity
-              style={[
-                styles.disconnectButton,
-                { backgroundColor: colors.inputBackground },
-              ]}
-              onPress={handleDisconnectPress}
-              activeOpacity={0.8}
-            >
-              <Text style={[styles.disconnectText, { color: colors.text }]}>
-                Disconnect
-              </Text>
-            </TouchableOpacity>
-          </View>
-
+        <KeyboardAvoidingView
+          style={styles.flex}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
           <ScrollView
+            ref={scrollRef}
             style={styles.flex}
-            contentContainerStyle={styles.messagesContent}
+            contentContainerStyle={[
+              styles.messagesContent,
+              { paddingHorizontal: Spacing.lg },
+            ]}
             keyboardShouldPersistTaps="handled"
+            onContentSizeChange={() => {
+              if (kbHeight > 0) {
+                scrollRef.current?.scrollToEnd({ animated: true });
+              }
+            }}
           >
             {chatMessages.length === 0 ? (
-              <View style={styles.emptyChat}>
-                <Ionicons
-                  name="chatbubbles-outline"
-                  size={48}
-                  color={colors.textSecondary}
-                  style={{ marginBottom: Spacing.sm }}
-                />
-                <Text style={[styles.emptyChatTitle, { color: colors.text }]}>
-                  Start the conversation
-                </Text>
-                <Text
-                  style={[
-                    styles.emptyChatText,
-                    { color: colors.textSecondary },
-                  ]}
-                >
-                  Messages from either device will appear here.
-                </Text>
-              </View>
+              <Text
+                style={[
+                  styles.emptyChatText,
+                  { color: colors.textSecondary, textAlign: 'center' },
+                ]}
+              >
+                Messages with this phone appear here.
+              </Text>
             ) : (
               chatMessages.map((chatMessage) => (
                 <View
@@ -607,13 +865,13 @@ export default function WifiScreen() {
                       chatMessage.sender === 'me'
                         ? [
                             styles.messageBubbleMe,
-                            { backgroundColor: colors.primary },
+                            { backgroundColor: colors.text },
                           ]
                         : [
                             styles.messageBubbleOther,
                             {
-                              backgroundColor: colors.surface,
-                              borderColor: colors.border,
+                              backgroundColor: colors.card,
+                              borderColor: colors.glassBorder,
                             },
                           ],
                     ]}
@@ -622,8 +880,8 @@ export default function WifiScreen() {
                       style={[
                         styles.messageText,
                         chatMessage.sender === 'me'
-                          ? styles.messageTextMe
-                          : { color: colors.text },
+                          ? [styles.messageTextMe, { color: colors.background }]
+                          : [styles.messageTextOther, { color: colors.text }],
                       ]}
                     >
                       {chatMessage.text}
@@ -634,662 +892,301 @@ export default function WifiScreen() {
             )}
           </ScrollView>
 
-          <View
-            style={[
-              styles.ttsBar,
-              {
-                backgroundColor: colors.surface,
-                borderTopColor: colors.border,
-              },
-            ]}
-          >
-            <TouchableOpacity
+          {(isVoiceRecording || isTranscribing) && (
+            <Text
+              style={[premium.hintLine, { color: colors.textSecondary }]}
+              numberOfLines={2}
+            >
+              {isVoiceRecording
+                ? `Recording...${partialText ? ` "${partialText}"` : ' tap mic to stop'}`
+                : 'Transcribing speech...'}
+            </Text>
+          )}
+
+          <View style={{ paddingHorizontal: Spacing.lg }}>
+            <View
               style={[
-                styles.ttsToggle,
+                premium.utilRow,
                 {
-                  backgroundColor: ttsEnabled
-                    ? colors.primary
-                    : colors.inputBackground,
+                  backgroundColor: colors.card,
+                  borderColor: colors.glassBorder,
                 },
               ]}
-              onPress={() => setTtsEnabled(!ttsEnabled)}
-              activeOpacity={0.82}
             >
-              <Ionicons
-                name={ttsEnabled ? 'volume-high' : 'volume-mute'}
-                size={16}
-                color={ttsEnabled ? '#FFFFFF' : colors.textSecondary}
-              />
-              <Text
-                style={[
-                  styles.ttsToggleText,
-                  { color: ttsEnabled ? '#FFFFFF' : colors.textSecondary },
-                ]}
-              >
-                {ttsEnabled ? 'Auto-speak ON' : 'Auto-speak OFF'}
-              </Text>
-            </TouchableOpacity>
-
-            {!ttsReady && ttsEnabled ? (
-              <Text style={[styles.ttsStatus, { color: colors.textSecondary }]}>
-                {ttsLoading
-                  ? 'Loading voice…'
-                  : ttsError
-                    ? `Voice failed: ${ttsError}`
-                    : 'Voice not loaded'}
-              </Text>
-            ) : ttsSpeaking ? (
-              <Text style={[styles.ttsStatus, { color: colors.primary }]}>
-                🔊 Speaking…
-              </Text>
-            ) : null}
-
-            {ttsSpeaking && (
               <TouchableOpacity
                 style={[
-                  styles.ttsStop,
-                  { backgroundColor: colors.inputBackground },
-                ]}
-                onPress={stopTts}
-                activeOpacity={0.82}
-              >
-                <Ionicons name="stop" size={16} color={colors.error} />
-                <Text style={[styles.ttsStopText, { color: colors.error }]}>
-                  Stop
-                </Text>
-              </TouchableOpacity>
-            )}
-          </View>
-
-          {(isVoiceRecording || isTranscribing) && (
-            <View
-              style={[
-                styles.voiceIndicator,
-                {
-                  backgroundColor: isVoiceRecording ? '#FEE2E2' : '#DBEAFE',
-                  borderTopColor: colors.border,
-                },
-              ]}
-            >
-              <View style={styles.voiceIndicatorIcon}>
-                {isTranscribing ? (
-                  <ActivityIndicator size="small" color={colors.primary} />
-                ) : (
-                  <View style={styles.recordingPulse} />
-                )}
-              </View>
-              <View style={styles.voiceIndicatorTextContainer}>
-                <Text
-                  style={[
-                    styles.voiceIndicatorText,
-                    { color: isVoiceRecording ? colors.error : colors.primary },
-                  ]}
-                >
-                  {isVoiceRecording
-                    ? 'Recording… Tap mic to stop'
-                    : 'Transcribing speech…'}
-                </Text>
-                {isVoiceRecording && partialText.length > 0 && (
-                  <Text
-                    style={[styles.partialTranscript, { color: colors.text }]}
-                    numberOfLines={2}
-                  >
-                    {partialText}
-                  </Text>
-                )}
-              </View>
-            </View>
-          )}
-
-          {(voiceError || sttError) && !isVoiceRecording && !isTranscribing && (
-            <View
-              style={[styles.voiceErrorBar, { borderTopColor: colors.border }]}
-            >
-              <Text style={[styles.voiceErrorText, { color: colors.error }]}>
-                {voiceError ?? `Speech model: ${sttError}`}
-              </Text>
-            </View>
-          )}
-
-          <View
-            style={[
-              styles.sttBar,
-              {
-                backgroundColor: colors.surface,
-                borderTopColor: colors.border,
-              },
-            ]}
-          >
-            <View style={styles.sttStatusRow}>
-              <View
-                style={[
-                  styles.statusDotSmall,
+                  premium.hearChip,
                   {
-                    backgroundColor: sttReady
-                      ? colors.success
-                      : sttLoading
-                        ? colors.primary
-                        : colors.textSecondary,
+                    backgroundColor: ttsEnabled
+                      ? colors.text
+                      : colors.inputBackground,
                   },
                 ]}
-              />
-              <Text
-                style={[styles.sttStatusText, { color: colors.textSecondary }]}
+                onPress={() => setTtsEnabled(!ttsEnabled)}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Toggle auto-speak"
+                accessibilityState={{ selected: ttsEnabled }}
               >
-                {sttLoading
-                  ? `Loading ${selectedLanguage.label} speech model…`
-                  : sttReady
-                    ? `${selectedLanguage.label} speech model ready`
-                    : sttError
-                      ? `Speech model failed: ${sttError}`
-                      : 'Speech model not loaded'}
+                {ttsEnabled ? (
+                  <Volume2 size={14} color={colors.background} />
+                ) : (
+                  <VolumeX size={14} color={colors.textSecondary} />
+                )}
+                <Text
+                  style={[
+                    premium.hearToggleText,
+                    {
+                      color: ttsEnabled
+                        ? colors.background
+                        : colors.textSecondary,
+                    },
+                  ]}
+                >
+                  Hear
+                </Text>
+              </TouchableOpacity>
+              <Text
+                style={[premium.utilStatus, { color: colors.textSecondary }]}
+                numberOfLines={1}
+              >
+                {ttsSpeaking
+                  ? `Speaking${ttsLangLabel ? ` • ${ttsLangLabel}` : ''}...`
+                  : ttsLoading
+                    ? 'Loading voice...'
+                    : 'Voice ready'}
               </Text>
+              {ttsSpeaking ? (
+                <TouchableOpacity
+                  onPress={stopTts}
+                  activeOpacity={0.8}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Stop speaking"
+                >
+                  <Square size={16} color={colors.error} fill={colors.error} />
+                </TouchableOpacity>
+              ) : null}
+              {messages.length > 0 ? (
+                <TouchableOpacity
+                  onPress={handleClearMessages}
+                  activeOpacity={0.8}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear WiFi messages"
+                >
+                  <Trash2 size={16} color={colors.textSecondary} />
+                </TouchableOpacity>
+              ) : null}
             </View>
           </View>
 
           <View
-            style={[
-              styles.inputContainer,
-              {
-                backgroundColor: colors.surface,
-                borderTopColor: colors.border,
-              },
-            ]}
+            style={{
+              paddingHorizontal: Spacing.lg,
+              paddingBottom: kbHeight > 0 ? kbHeight + 12 : chatBottomPad,
+            }}
           >
-            <TextInput
-              value={message}
-              onChangeText={setMessage}
-              placeholder={
-                isVoiceRecording ? 'Recording…' : 'Type a message...'
-              }
-              placeholderTextColor={colors.textSecondary}
+            <View
               style={[
-                styles.input,
-                { backgroundColor: colors.inputBackground, color: colors.text },
-              ]}
-              multiline
-              editable={!isVoiceRecording && !isTranscribing}
-            />
-
-            <TouchableOpacity
-              style={[
-                styles.micButton,
+                premium.composerCard,
                 {
-                  backgroundColor: isVoiceRecording
-                    ? colors.error
-                    : colors.inputBackground,
+                  backgroundColor: colors.card,
+                  borderColor: colors.glassBorder,
                 },
+                Shadows.floating,
               ]}
-              onPress={handleVoiceToggle}
-              disabled={isTranscribing}
-              activeOpacity={0.82}
             >
-              {isTranscribing ? (
-                <ActivityIndicator size="small" color={colors.primary} />
-              ) : (
-                <Ionicons
-                  name={isVoiceRecording ? 'stop' : 'mic'}
-                  size={20}
-                  color={isVoiceRecording ? '#FFFFFF' : colors.primary}
-                />
-              )}
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[
-                styles.sendButton,
-                {
-                  backgroundColor: message.trim()
-                    ? colors.primary
-                    : colors.inputBackground,
-                },
-              ]}
-              disabled={!message.trim() || isVoiceRecording || isTranscribing}
-              onPress={sendMessage}
-              activeOpacity={0.82}
-            >
-              <Ionicons
-                name="send"
-                size={18}
-                color={message.trim() ? '#FFFFFF' : colors.textSecondary}
+              <TextInput
+                value={chatInput}
+                onChangeText={setChatInput}
+                placeholder={
+                  isVoiceRecording ? 'Recording...' : 'Type a message...'
+                }
+                placeholderTextColor={colors.textSecondary}
+                style={[
+                  premium.input,
+                  {
+                    backgroundColor: colors.inputBackground,
+                    color: colors.text,
+                    flex: 1,
+                  },
+                ]}
+                multiline
+                editable={!isVoiceRecording && !isTranscribing}
               />
-            </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  premium.circleBtn,
+                  {
+                    backgroundColor: isVoiceRecording
+                      ? colors.error
+                      : colors.inputBackground,
+                  },
+                ]}
+                onPress={handleVoiceToggle}
+                disabled={isTranscribing}
+                activeOpacity={0.85}
+              >
+                {isTranscribing ? (
+                  <ActivityIndicator size="small" color={colors.primary} />
+                ) : isVoiceRecording ? (
+                  <Square size={18} color="#FFF" fill="#FFF" />
+                ) : (
+                  <Mic size={20} color={colors.primary} />
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  premium.circleBtn,
+                  {
+                    backgroundColor: chatInput.trim()
+                      ? '#CF5C36'
+                      : colors.inputBackground,
+                  },
+                ]}
+                disabled={
+                  !chatInput.trim() || isVoiceRecording || isTranscribing
+                }
+                onPress={sendChatMessage}
+                activeOpacity={0.85}
+              >
+                <Send
+                  size={18}
+                  color={chatInput.trim() ? '#FFFFFF' : colors.textSecondary}
+                />
+              </TouchableOpacity>
+            </View>
+            {(voiceError || sttError) &&
+            !isVoiceRecording &&
+            !isTranscribing ? (
+              <Text style={{ fontSize: 12, color: colors.error, marginTop: 6 }}>
+                {voiceError ?? `Speech model: ${sttError}`}
+              </Text>
+            ) : null}
           </View>
-        </View>
+        </KeyboardAvoidingView>
       )}
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-  },
-
-  flex: {
-    flex: 1,
-  },
-
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: Spacing.md,
-    paddingTop: Spacing.md,
-    paddingBottom: Spacing.md,
-    borderBottomWidth: 1,
-  },
-
-  headerLabel: {
-    fontSize: 20,
-    fontWeight: '900',
-    letterSpacing: 2,
-  },
-
-  statusBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: Radius.sm,
-  },
-
-  statusText: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-
-  scrollContent: {
-    padding: Spacing.md,
-  },
-
-  section: {
-    marginBottom: Spacing.lg,
-  },
-
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: Spacing.md,
-  },
-
-  sectionTitle: {
-    fontSize: FontSize.medium,
-    fontWeight: '700',
-  },
-
-  sectionDescription: {
-    fontSize: FontSize.small + 2,
-    lineHeight: 20,
-    marginTop: 6,
-    marginBottom: Spacing.md,
-  },
-
-  deviceCount: {
-    marginTop: 3,
-    fontSize: FontSize.small,
-  },
-
-  primaryButton: {
-    height: 52,
-    borderRadius: Radius.md,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  buttonIcon: {
-    marginRight: 8,
-  },
-
-  primaryButtonText: {
-    color: '#FFFFFF',
-    fontSize: FontSize.body,
-    fontWeight: '700',
-  },
-
-  nameLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.8,
-    marginBottom: 6,
-  },
-
-  advertisedAs: {
+const premium = {
+  nameInput: {
+    borderWidth: 1,
+    minHeight: 50,
+    borderRadius: 14,
+    paddingHorizontal: 14,
     fontSize: 15,
-    fontWeight: '600',
-    marginBottom: 12,
-  },
-
-  stopButton: {
-    height: 44,
-    borderRadius: Radius.md,
-    alignItems: 'center',
-    justifyContent: 'center',
     marginTop: 8,
+    marginBottom: 10,
   },
-
-  stopButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
+  primaryBtn: {
+    minHeight: 54,
+    borderRadius: 999,
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    gap: 8,
   },
-
-  emptyState: {
-    padding: Spacing.lg,
-    borderRadius: Radius.lg,
-    alignItems: 'center',
-    borderWidth: 1,
+  primaryBtnText: { color: '#FFF', fontSize: 15, fontWeight: '700' as const },
+  rowBetween: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
   },
-
-  emptyStateTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 4,
-  },
-
-  emptyStateText: {
-    fontSize: FontSize.small,
-    textAlign: 'center',
-    lineHeight: 18,
-  },
-
-  deviceList: {
-    gap: 10,
-  },
-
-  deviceCard: {
-    borderRadius: Radius.md,
-    padding: Spacing.md,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderWidth: 1,
-  },
-
-  deviceInfo: {
+  rowGap: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 8,
     flex: 1,
-    marginRight: Spacing.sm,
   },
-
-  deviceName: {
-    fontSize: 15,
-    fontWeight: '600',
-    marginBottom: 3,
-  },
-
-  deviceId: {
-    fontSize: 11,
-  },
-
-  connectButton: {
+  miniBtn: {
     minWidth: 82,
     height: 40,
     paddingHorizontal: 14,
-    borderRadius: Radius.sm,
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderRadius: 999,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
   },
-
-  connectButtonText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600',
+  miniBtnText: { color: '#FFF8EC', fontSize: 14, fontWeight: '700' as const },
+  mono: { fontSize: 11, marginTop: 2 },
+  empty: { alignItems: 'center' as const, paddingVertical: 28 },
+  errorText: { fontSize: 13, fontWeight: '600' as const, lineHeight: 18 },
+  linkText: { fontSize: 13, fontWeight: '700' as const, marginTop: 2 },
+  dot: { width: 10, height: 10, borderRadius: 5 },
+  hintLine: {
+    textAlign: 'center' as const,
+    fontSize: 12,
+    fontWeight: '600' as const,
+    paddingHorizontal: Spacing.lg,
+    marginTop: 6,
   },
-
-  connectionBar: {
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm + 4,
-    borderBottomWidth: 1,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-
-  connectionInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-  },
-
-  connectedDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-  },
-
-  connectedTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-  },
-
-  connectedRole: {
-    fontSize: 11,
-    marginTop: 2,
-  },
-
-  disconnectButton: {
+  utilRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 10,
+    marginTop: 8,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: Radius.sm,
-  },
-
-  disconnectText: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
-
-  messagesContent: {
-    padding: Spacing.md,
-    paddingBottom: Spacing.lg,
-    flexGrow: 1,
-  },
-
-  emptyChat: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingTop: 80,
-  },
-
-  emptyChatTitle: {
-    fontSize: 17,
-    fontWeight: '600',
-    marginBottom: 6,
-  },
-
-  emptyChatText: {
-    fontSize: FontSize.small,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-
-  messageRow: {
-    width: '100%',
-    marginBottom: 10,
-  },
-
-  messageRowMe: {
-    alignItems: 'flex-end',
-  },
-
-  messageRowOther: {
-    alignItems: 'flex-start',
-  },
-
-  messageBubble: {
-    maxWidth: '78%',
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 17,
-  },
-
-  messageBubbleMe: {
-    borderBottomRightRadius: 5,
-  },
-
-  messageBubbleOther: {
-    borderBottomLeftRadius: 5,
+    borderRadius: 999,
     borderWidth: 1,
   },
-
-  messageText: {
-    fontSize: 15,
-    lineHeight: 21,
+  hearChip: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
   },
-
-  messageTextMe: {
-    color: '#FFFFFF',
-  },
-
-  inputContainer: {
-    padding: Spacing.sm + 4,
-    borderTopWidth: 1,
-    flexDirection: 'row',
-    alignItems: 'flex-end',
+  utilStatus: { flex: 1, fontSize: 12, fontWeight: '600' as const },
+  hearRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
     gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 14,
+    marginBottom: 10,
   },
-
+  hearText: { fontSize: 13, fontWeight: '700' as const },
+  composer: {
+    flexDirection: 'row' as const,
+    gap: 8,
+    alignItems: 'flex-end' as const,
+  },
+  composerCard: {
+    flexDirection: 'row' as const,
+    alignItems: 'flex-end' as const,
+    gap: 8,
+    padding: 10,
+    borderRadius: 20,
+    borderWidth: 1,
+  },
   input: {
-    flex: 1,
     minHeight: 46,
     maxHeight: 110,
     paddingHorizontal: 14,
     paddingVertical: 11,
-    borderRadius: Radius.md,
+    borderRadius: 14,
     fontSize: 15,
   },
-
-  sendButton: {
+  circleBtn: {
     width: 46,
     height: 46,
-    borderRadius: Radius.md,
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderRadius: 23,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
   },
-
-  micButton: {
-    width: 46,
-    height: 46,
-    borderRadius: Radius.md,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  voiceIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 10,
-    borderTopWidth: 1,
-  },
-
-  voiceIndicatorIcon: {
-    marginRight: 8,
-    width: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  voiceIndicatorTextContainer: {
-    flex: 1,
-  },
-
-  voiceIndicatorText: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
-
-  partialTranscript: {
-    fontSize: 14,
-    marginTop: 4,
-    fontStyle: 'italic',
-  },
-
-  recordingPulse: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#DC2626',
-  },
-
-  voiceErrorBar: {
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 8,
-    borderTopWidth: 1,
-    backgroundColor: '#FEF2F2',
-  },
-
-  voiceErrorText: {
-    fontSize: 12,
-    fontWeight: '500',
-  },
-
-  ttsBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: Spacing.sm + 4,
-    paddingVertical: 8,
-    borderTopWidth: 1,
-    gap: 8,
-  },
-
-  ttsToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: Radius.sm,
-  },
-
-  ttsToggleText: {
-    fontSize: 13,
-    fontWeight: '700',
-  },
-
-  ttsStatus: {
-    flex: 1,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-
-  ttsStop: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  hearToggle: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
     gap: 4,
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
     paddingVertical: 8,
-    borderRadius: Radius.sm,
+    borderRadius: 999,
+    height: 46,
   },
-
-  ttsStopText: {
-    fontSize: 13,
-    fontWeight: '700',
-  },
-
-  sttBar: {
-    paddingHorizontal: Spacing.sm + 4,
-    paddingVertical: 8,
-    borderTopWidth: 1,
-  },
-
-  sttStatusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-
-  statusDotSmall: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-
-  sttStatusText: {
-    flex: 1,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-});
+  hearToggleText: { fontSize: 12, fontWeight: '700' as const },
+};
