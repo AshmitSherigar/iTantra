@@ -22,6 +22,7 @@ import {
   requestMeshDiscovery,
   sendNearbyBroadcast,
   makeMeshEnvelope,
+  isRangeEnvelope,
   isSosEnvelope,
   type MeshStatus,
 } from '@/features/bluetooth';
@@ -204,6 +205,8 @@ export default function MissionModeScreen() {
   useEffect(
     () =>
       subscribeToBroadcasts((envelope) => {
+        // Device-search ranging pings never enter the mission transcript.
+        if (isRangeEnvelope(envelope)) return;
         if (isSosEnvelope(envelope)) {
           setCurrentAlert({
             senderName: envelope.senderName,

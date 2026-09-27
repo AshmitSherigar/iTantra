@@ -19,6 +19,28 @@ export type SosMeta = {
   lon?: number;
 };
 
+/**
+ * Device-search proximity ping (Device Search Mode).
+ *
+ * Carried on the same flood mesh as chat/SOS so no new connection is needed:
+ * the seeker pings ~every 2.5s while tracking a target, and the target's
+ * phone replies with its own measurement — both sides show approximate
+ * distance. Old app versions (no `range` support) display the benign
+ * `message` text as a normal broadcast.
+ */
+export type RangeMeta = {
+  /** Random per-screen-open id so replies match one tracking session. */
+  sessionId: string;
+  /** Display name of the phone being sought. */
+  targetName: string;
+  /** Display name of the seeker (author of this ping). */
+  seekerName: string;
+  /** Seeker's smoothed RSSI of the target, when it has one. */
+  seekerRssi?: number;
+  /** Final ping when tracking stops — peer clears its "being sought" card. */
+  bye?: boolean;
+};
+
 export type BroadcastEnvelope = {
   type: typeof BROADCAST_MESSAGE_TYPE;
   id: string;
@@ -35,9 +57,11 @@ export type BroadcastEnvelope = {
    * Optional discriminator. Old app versions ignore it and still display
    * the message as a normal broadcast (forward compatible).
    */
-  kind?: 'sos' | 'normal';
+  kind?: 'sos' | 'normal' | 'range';
   /** Present only when kind === 'sos'. */
   sos?: SosMeta;
+  /** Present only when kind === 'range'. */
+  range?: RangeMeta;
 };
 
 type BroadcastSender = (envelope: BroadcastEnvelope) => Promise<boolean>;
@@ -122,6 +146,16 @@ export function isSosEnvelope(envelope: {
   return msg.startsWith(SOS_MESSAGE_PREFIX) || msg.startsWith('🆘');
 }
 
+/**
+ * True for device-search proximity pings. These must NEVER land in chat
+ * inboxes, SOS inboxes, or TTS — every broadcast subscriber filters them
+ * out first and only the search screen consumes them.
+ */
+export function isRangeEnvelope(envelope: { kind?: string }): boolean {
+  if (!envelope) return false;
+  return (envelope as BroadcastEnvelope).kind === 'range';
+}
+
 export function getEnvelopeTtl(envelope: { ttl?: number }): number {
   const ttl =
     typeof envelope?.ttl === 'number' && Number.isFinite(envelope.ttl)
@@ -192,8 +226,11 @@ export function encodeBroadcast(envelope: BroadcastEnvelope): string {
   ) {
     out.ttl = Math.floor(envelope.ttl);
   }
-  if (envelope.kind === 'sos') out.kind = 'sos';
+  if (envelope.kind === 'sos' || envelope.kind === 'range') {
+    out.kind = envelope.kind;
+  }
   if (envelope.sos !== undefined) out.sos = envelope.sos;
+  if (envelope.range !== undefined) out.range = envelope.range;
   return JSON.stringify(out);
 }
 
@@ -218,7 +255,9 @@ export function decodeBroadcast(text: string): BroadcastEnvelope | null {
         ? Math.max(0, Math.min(Math.floor(candidate.ttl), MESH_DEFAULT_TTL))
         : MESH_DEFAULT_TTL;
     const kind =
-      candidate.kind === 'sos' || candidate.kind === 'normal'
+      candidate.kind === 'sos' ||
+      candidate.kind === 'normal' ||
+      candidate.kind === 'range'
         ? candidate.kind
         : undefined;
     // Preserve structured SOS meta when present; drop it when malformed so
@@ -243,7 +282,42 @@ export function decodeBroadcast(text: string): BroadcastEnvelope | null {
         lon: typeof rawSos.lon === 'number' ? rawSos.lon : undefined,
       };
     }
-    return { ...(candidate as BroadcastEnvelope), ttl, kind, sos };
+    // Preserve structured range meta when present; drop it when malformed so
+    // one bad sender can't wedge the search screen.
+    let range: RangeMeta | undefined;
+    const rawRange = candidate.range as Partial<RangeMeta> | undefined;
+    if (kind === 'range' && rawRange && typeof rawRange === 'object') {
+      const sessionId =
+        typeof rawRange.sessionId === 'string'
+          ? rawRange.sessionId.slice(0, 16)
+          : '';
+      const targetName =
+        typeof rawRange.targetName === 'string'
+          ? rawRange.targetName.slice(0, 32)
+          : '';
+      const seekerName =
+        typeof rawRange.seekerName === 'string'
+          ? rawRange.seekerName.slice(0, 32)
+          : '';
+      if (sessionId && targetName && seekerName) {
+        range = {
+          sessionId,
+          targetName,
+          seekerName,
+          ...(typeof rawRange.seekerRssi === 'number' &&
+          Number.isFinite(rawRange.seekerRssi)
+            ? {
+                seekerRssi: Math.max(
+                  -100,
+                  Math.min(0, Math.round(rawRange.seekerRssi)),
+                ),
+              }
+            : {}),
+          ...(rawRange.bye === true ? { bye: true as const } : {}),
+        };
+      }
+    }
+    return { ...(candidate as BroadcastEnvelope), ttl, kind, sos, range };
   } catch {
     return null;
   }
@@ -322,6 +396,8 @@ export type MeshPeerInfo = {
   id: string;
   name: string;
   rssi?: number;
+  /** Calibrated Tx power from the advertisement, when the sender provides it. */
+  txPower?: number;
 };
 
 export type MeshStatus = {
@@ -333,6 +409,8 @@ export type MeshStatus = {
   peers: MeshPeerInfo[];
   /** Connected mesh links (central + peripheral sides combined). */
   connectedCount: number;
+  /** BLE ids with an open central (GATT) link — for live readRSSI ranging. */
+  connectedIds: string[];
   /** Last mesh broadcast result for the homepage hint line. */
   lastResult: string | null;
   /** Links confirmed delivered in the last flood round. */
@@ -354,6 +432,7 @@ let meshStatus: MeshStatus = {
   isScanning: false,
   peers: [],
   connectedCount: 0,
+  connectedIds: [],
   lastResult: null,
   lastDelivered: 0,
   lastAttempted: 0,
