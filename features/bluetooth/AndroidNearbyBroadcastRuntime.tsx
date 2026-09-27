@@ -48,6 +48,9 @@ const ATTEMPT_RETRY_MS = 30000;
 /** Relay jitter: just enough to avoid air collisions (was 400-1000). */
 const RELAY_JITTER_MIN_MS = 20;
 const RELAY_JITTER_MAX_MS = 80;
+/** SOS relay jitter: SOS alerts first, normal mesh backs off slightly. */
+const SOS_RELAY_JITTER_MIN_MS = 0;
+const SOS_RELAY_JITTER_MAX_MS = 20;
 
 /**
  * Homepage mesh runtime (flood broadcast, no manual pairing).
@@ -538,11 +541,16 @@ export default function AndroidNearbyBroadcastRuntime() {
     () =>
       registerBroadcastRelay((nextEnvelope) => {
         void (async () => {
+          // SOS jumps the relay queue: 0-20ms vs 20-80ms for normal mesh.
+          const isSos = nextEnvelope?.kind === 'sos';
+          const jitterMin = isSos
+            ? SOS_RELAY_JITTER_MIN_MS
+            : RELAY_JITTER_MIN_MS;
+          const jitterMax = isSos
+            ? SOS_RELAY_JITTER_MAX_MS
+            : RELAY_JITTER_MAX_MS;
           await sleep(
-            RELAY_JITTER_MIN_MS +
-              Math.floor(
-                Math.random() * (RELAY_JITTER_MAX_MS - RELAY_JITTER_MIN_MS),
-              ),
+            jitterMin + Math.floor(Math.random() * (jitterMax - jitterMin)),
           );
           try {
             const relayStarted = Date.now();

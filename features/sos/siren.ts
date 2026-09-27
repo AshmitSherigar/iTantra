@@ -37,6 +37,46 @@ function onStatus(status: AVPlaybackStatus): void {
   }
 }
 
+let preloadInflight: Promise<void> | null = null;
+
+/**
+ * Preload the siren sound + audio mode (timer-arm / app-start time) so the
+ * first `playSosSiren()` is an instant replay, not a 200-500ms load.
+ * Fire-and-forget, never throws.
+ */
+export function preloadSosSiren(): void {
+  if (sound || preloadInflight) return;
+  preloadInflight = (async () => {
+    try {
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: true,
+        shouldDuckAndroid: true,
+        playThroughEarpieceAndroid: false,
+      });
+    } catch {}
+    try {
+      const created = await Audio.Sound.createAsync(
+        SIREN_ASSET,
+        { shouldPlay: false, isLooping: true, volume: 1.0 },
+        onStatus,
+      );
+      if (!sound) sound = created.sound;
+      else {
+        try {
+          await created.sound.unloadAsync();
+        } catch {}
+      }
+    } catch (e) {
+      console.warn('[SOS] siren preload failed:', e);
+    } finally {
+      preloadInflight = null;
+    }
+  })();
+  void preloadInflight.catch(() => {});
+}
+
 /** Loop the SOS siren at full volume until stopSosSiren(). Safe to call twice. */
 export async function playSosSiren(): Promise<void> {
   try {

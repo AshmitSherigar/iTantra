@@ -15,6 +15,7 @@ import {
   getEnvelopeTtl,
   isSosEnvelope,
   makeSosEnvelope,
+  requestMeshDiscovery,
   sendNearbyBroadcast,
   subscribeToBroadcasts,
 } from '../features/bluetooth';
@@ -26,6 +27,8 @@ import {
   cancelScheduled,
   clearActiveTimer,
   ensureSosIncomingCategory,
+  ensureSosLocationPermission,
+  getCachedSosLocation,
   isKeeperKnownGood,
   loadActiveTimer,
   registerSosBackgroundTask,
@@ -34,12 +37,13 @@ import {
   scheduleTimerNotifications,
   showImmediate,
   showSosIncoming,
-  tryGetLocation,
+  tryGetLocationFast,
   wasLastKeeperStartFatal,
 } from '../features/sos';
 import {
   onSirenPlayingChange,
   playSosSiren,
+  preloadSosSiren,
   stopSosSiren,
 } from '../features/sos/siren';
 import {
@@ -54,14 +58,21 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
  * SOS engine. Mounted once at the root so the safety timer survives tab
  * switches, backgrounding, and (via storage + notifications) app kills.
  *
- * Retry policy (chosen): 3 flood rounds, 8s apart. Each round already
- * scans + settles + transmits via AndroidNearbyBroadcastRuntime. If all 3
+ * Retry policy: 3 flood rounds, gaps 2s then 5s (worst ~7s, was 3x8s=16s).
+ * Warm-mesh fast path makes round 1 land in <1s when links exist. If all 3
  * fail (no peers), the SOS is kept as `pendingRetry` with the exact
- * message so the user can one-tap re-send when phones are near.
+ * message so the user can one-tap re-send when phones are near. After a
+ * successful send, 2 same-id background waves catch late joiners
+ * (dedup-safe: receivers already holding the id drop them silently).
  */
 
 const RETRY_ROUNDS = 3;
-const RETRY_GAP_MS = 8000;
+/** Gap BEFORE attempt N (attempt 1 fires immediately). */
+const RETRY_GAPS_MS = [0, 2000, 5000];
+/** Post-success late-joiner waves (fire-and-forget, same id). */
+const LATE_WAVE_GAPS_MS = [3000, 8000];
+/** Location budget on the send hot path (cached fix = 0ms). */
+const SOS_LOCATION_FAST_MS = 1200;
 
 function hopsOf(envelope: BroadcastEnvelope): number {
   return Math.max(0, MESH_DEFAULT_TTL - getEnvelopeTtl(envelope));
@@ -178,19 +189,25 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
         });
         if (alertedSosIdsRef.current.has(envelope.id)) return;
         alertedSosIdsRef.current.add(envelope.id);
+        // Siren first (instant replay of preloaded sound), notification
+        // second — the heads-up does sequential channel/category/schedule
+        // calls that must not delay audible alert.
+        if (sirenEnabledRef.current) {
+          void playSosSiren();
+        }
         void showSosIncoming(
           '🆘 SOS Emergency',
           `${envelope.senderName}: ${envelope.message}`.slice(0, 240),
         );
-        if (sirenEnabledRef.current) {
-          void playSosSiren();
-        }
       }),
     [],
   );
 
   // "Stop siren" notification action (receiver taps it on the heads-up).
   useEffect(() => {
+    try {
+      void preloadSosSiren();
+    } catch {}
     try {
       void ensureSosIncomingCategory();
     } catch {}
@@ -262,6 +279,7 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
         lon?: number;
       },
     ): Promise<boolean> => {
+      const t0 = Date.now();
       const envelope = makeSosEnvelope({
         senderName: senderName(),
         message,
@@ -269,16 +287,36 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
         sos: sosMeta,
       });
       for (let attempt = 1; attempt <= RETRY_ROUNDS; attempt += 1) {
+        if (attempt > 1) {
+          const gap = RETRY_GAPS_MS[attempt - 1] ?? 5000;
+          await new Promise((r) => setTimeout(r, gap));
+        }
         try {
           const sent = await sendNearbyBroadcast(envelope);
-          if (sent) return true;
+          console.log(
+            `[SOS-Timing] flood attempt=${attempt} sent=${sent} elapsedMs=${Date.now() - t0}`,
+          );
+          if (sent) {
+            // Late-joiner waves: same id, dedup-safe. Catches peers that
+            // arrived just after round 1 without blocking the caller.
+            void (async () => {
+              for (const gap of LATE_WAVE_GAPS_MS) {
+                await new Promise((r) => setTimeout(r, gap));
+                try {
+                  await sendNearbyBroadcast(envelope);
+                } catch {}
+              }
+            })();
+            console.log(
+              `[SOS-Timing] flood ok attempts=${attempt} totalMs=${Date.now() - t0}`,
+            );
+            return true;
+          }
         } catch (e) {
           console.warn(`[SOS] flood attempt ${attempt} failed:`, e);
         }
-        if (attempt < RETRY_ROUNDS) {
-          await new Promise((r) => setTimeout(r, RETRY_GAP_MS));
-        }
       }
+      console.log(`[SOS-Timing] flood failed totalMs=${Date.now() - t0}`);
       return false;
     },
     [],
@@ -294,17 +332,31 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
       // message is kept as a re-sendable pending retry.
       let message: string | null = null;
       try {
-        // Refresh location at fire time when the user opted in.
+        const fireT0 = Date.now();
+        // Fast location: timer snapshot or module cache first (0ms), fresh
+        // fix raced with a short budget — never the old 5s fire-time block.
         let lat = timer.lat;
         let lon = timer.lon;
+        let locMs = 0;
         if (timer.includeLocation) {
-          try {
-            const loc = await tryGetLocation(5000);
-            if (loc) {
-              lat = loc.lat;
-              lon = loc.lon;
+          if (lat === undefined || lon === undefined) {
+            const cached = getCachedSosLocation();
+            if (cached) {
+              lat = cached.lat;
+              lon = cached.lon;
             }
-          } catch {}
+          }
+          if (lat === undefined || lon === undefined) {
+            const locT0 = Date.now();
+            try {
+              const loc = await tryGetLocationFast(SOS_LOCATION_FAST_MS);
+              if (loc) {
+                lat = loc.lat;
+                lon = loc.lon;
+              }
+            } catch {}
+            locMs = Date.now() - locT0;
+          }
         }
         message = buildSosHelpText({
           helpMessage: timer.helpMessage,
@@ -315,7 +367,14 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
           startedAt: timer.startedAt,
           deadlineAt: timer.deadlineAt,
         });
-        const ok = await floodSos(message, {
+        // Instant feedback: siren + sending state BEFORE awaiting the mesh.
+        // A missed check-in may mean the user is incapacitated nearby;
+        // noise draws rescuers even if the flood still needs seconds.
+        if (sirenEnabledRef.current) {
+          void playSosSiren();
+        }
+        setLastResult('🆘 SOS firing — broadcasting to nearby phones…');
+        const floodPromise = floodSos(message, {
           startedAt: timer.startedAt,
           deadlineAt: timer.deadlineAt,
           isAuto: true,
@@ -323,16 +382,18 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
           lat,
           lon,
         });
-        await clearActiveTimer();
-        await cancelScheduled(timer.notificationIds ?? []);
-        await stopSosKeeper().catch(() => {});
+        // Parallel cleanup: never gate the flood on storage/notification.
+        void Promise.all([
+          clearActiveTimer().catch(() => {}),
+          cancelScheduled(timer.notificationIds ?? []).catch(() => {}),
+          stopSosKeeper().catch(() => {}),
+        ]);
         setActiveTimer(null);
         setRemainingMs(0);
-        // Sound the siren on the sender's phone too - a missed check-in
-        // means the user may be incapacitated nearby; noise draws rescuers.
-        if (sirenEnabledRef.current) {
-          void playSosSiren();
-        }
+        const ok = await floodPromise;
+        console.log(
+          `[SOS-Timing] auto-fire locMs=${locMs} totalMs=${Date.now() - fireT0} ok=${ok}`,
+        );
         if (ok) {
           setLastResult(
             `🆘 SOS broadcasted at ${new Date().toLocaleTimeString()}. Nearby phones relay it further. Keep the app open.`,
@@ -499,7 +560,9 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // ---- foreground tick ----
+  // ---- foreground tick + exact deadline timeout ----
+  // 1s interval drives the countdown UI; an exact timeout removes the
+  // 0-1s poll jitter so auto-fire starts within ms of the deadline.
   useEffect(() => {
     if (!activeTimer) return;
     const tick = () => {
@@ -510,7 +573,34 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
       }
     };
     tick();
-    const id = setInterval(tick, 1000);
+    const interval = setInterval(tick, 1000);
+    const msToDeadline = activeTimer.deadlineAt - Date.now();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    if (msToDeadline > 0 && msToDeadline < 24 * 60 * 60 * 1000) {
+      timeout = setTimeout(() => {
+        void fireExpiredTimerRef.current(activeTimer);
+      }, msToDeadline);
+    }
+    return () => {
+      clearInterval(interval);
+      if (timeout) clearTimeout(timeout);
+    };
+  }, [activeTimer]);
+
+  // ---- deadline warm-up ----
+  // While a timer is armed, keep the BLE mesh warm so the deadline flood
+  // transmits instantly. Aggressive only in the final 5 min to save radio.
+  useEffect(() => {
+    if (!activeTimer) return;
+    const id = setInterval(() => {
+      const t = activeTimerRef.current;
+      if (!t) return;
+      const msLeft = t.deadlineAt - Date.now();
+      if (msLeft <= 0 || msLeft > 5 * 60 * 1000) return;
+      try {
+        void requestMeshDiscovery().catch(() => {});
+      } catch {}
+    }, 30000);
     return () => clearInterval(id);
   }, [activeTimer]);
 
@@ -560,6 +650,19 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
       await saveActiveTimer(timer);
       setActiveTimer(timer);
       setRemainingMs(timer.deadlineAt - Date.now());
+      // Pre-warm everything the fire path needs: siren sound, location
+      // permission, and BLE discovery — so deadline work is instant.
+      try {
+        preloadSosSiren();
+      } catch {}
+      if (input.includeLocation) {
+        try {
+          void ensureSosLocationPermission().catch(() => {});
+        } catch {}
+      }
+      try {
+        void requestMeshDiscovery().catch(() => {});
+      } catch {}
       // Foreground service: keeps the countdown + BLE flood alive while
       // backgrounded so the deadline fires without reopening the app.
       const keeperOk = await startSosKeeper({
@@ -573,10 +676,11 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
       );
       setPendingRetry(null);
       // Background location patch (SOS-only location): only applies while
-      // this same timer is still active.
+      // this same timer is still active. Short budget — fire-time refresh
+      // (tryGetLocationFast) is the primary source now.
       if (input.includeLocation) {
         try {
-          const loc = await tryGetLocation(5000);
+          const loc = await tryGetLocationFast(4000);
           if (loc && activeTimerRef.current?.id === timer.id) {
             const patched: SosTimerState = {
               ...timer,
@@ -632,19 +736,30 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
 
   const sendManualSos = useCallback(
     async (helpMessage: string, includeLocation: boolean): Promise<boolean> => {
+      const tapT0 = Date.now();
       setIsFiring(true);
+      setLastResult('🆘 Sending SOS to nearby phones…');
       try {
+        // Fast location: cached fix first, fresh fix raced with a short
+        // budget — never the old 5s tap-time block.
         let lat: number | undefined;
         let lon: number | undefined;
         if (includeLocation) {
-          try {
-            const loc = await tryGetLocation(5000);
-            if (loc) {
-              lat = loc.lat;
-              lon = loc.lon;
-            }
-          } catch {}
+          const cached = getCachedSosLocation();
+          if (cached) {
+            lat = cached.lat;
+            lon = cached.lon;
+          } else {
+            try {
+              const loc = await tryGetLocationFast(SOS_LOCATION_FAST_MS);
+              if (loc) {
+                lat = loc.lat;
+                lon = loc.lon;
+              }
+            } catch {}
+          }
         }
+        const locMs = Date.now() - tapT0;
         const now = Date.now();
         const message = buildSosHelpText({
           helpMessage,
@@ -662,6 +777,9 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
           lat,
           lon,
         });
+        console.log(
+          `[SOS-Timing] manual tap locMs=${locMs} totalMs=${Date.now() - tapT0} ok=${ok}`,
+        );
         if (ok) {
           setLastResult(
             `🆘 SOS sent at ${new Date().toLocaleTimeString()}. Nearby phones relay it further. Keep the app open.`,

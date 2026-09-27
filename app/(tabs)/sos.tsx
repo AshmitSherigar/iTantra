@@ -25,7 +25,13 @@ import * as Haptics from 'expo-haptics';
 
 import { useTheme } from '../../context/ThemeContext';
 import { useSos } from '../../context/SosContext';
-import { SOS_PRESETS, formatRemaining } from '../../features/sos';
+import {
+  SOS_PRESETS,
+  ensureSosLocationPermission,
+  formatRemaining,
+} from '../../features/sos';
+import { preloadSosSiren } from '../../features/sos/siren';
+import { requestMeshDiscovery } from '../../features/bluetooth';
 import {
   resolveSosMapUrl,
   stripUrlsForDisplay,
@@ -149,6 +155,17 @@ export default function SosScreen() {
   }
 
   function handleManualSos() {
+    // Pre-warm while the user reads the confirm dialog: BLE discovery,
+    // location permission, and siren load all happen before SEND is tapped.
+    try {
+      void requestMeshDiscovery().catch(() => {});
+    } catch {}
+    try {
+      void ensureSosLocationPermission().catch(() => {});
+    } catch {}
+    try {
+      preloadSosSiren();
+    } catch {}
     void showAppAlert(
       'Send SOS now?',
       'This broadcasts SOS to ALL nearby VaaniSetu phones immediately (3 flood tries).',
