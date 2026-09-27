@@ -9,7 +9,7 @@ import {
 } from 'react-native';
 import { router, Stack } from 'expo-router';
 import * as Device from 'expo-device';
-import { LogOut, MessageCircle, RefreshCw } from 'lucide-react-native';
+import { Globe, LogOut, MessageCircle } from 'lucide-react-native';
 
 import { useTheme } from '@/context/ThemeContext';
 import { useLanguage } from '@/context/LanguageContext';
@@ -139,7 +139,6 @@ export default function MissionModeScreen() {
     senderName: string;
     message: string;
   } | null>(null);
-  const [connectingBle, setConnectingBle] = useState(false);
   /** Guards the Arm-timer tap: startTimer is async, so without this a second
    *  tap fires a concurrent arming round and the first-tap UI looks dead. */
   const [isArming, setIsArming] = useState(false);
@@ -291,12 +290,7 @@ export default function MissionModeScreen() {
         connectTo(peer.address);
       }
     }
-    setConnectingBle(true);
-    try {
-      await requestMeshDiscovery();
-    } finally {
-      setConnectingBle(false);
-    }
+    await requestMeshDiscovery();
   }, [startHosting, wifiPeers, connectedAddresses, connectTo]);
 
   const handleConnectOne = useCallback(
@@ -357,14 +351,10 @@ export default function MissionModeScreen() {
           }
           right={
             <CircleButton
-              onPress={handleConnectAll}
-              accessibilityLabel="Connect all nearby devices"
+              onPress={() => router.push('/settings/language' as any)}
+              accessibilityLabel="Change voice language"
             >
-              {connectingBle ? (
-                <ActivityIndicator size="small" color={colors.text} />
-              ) : (
-                <RefreshCw size={20} color={colors.text} />
-              )}
+              <Globe size={20} color={colors.text} />
             </CircleButton>
           }
         />
