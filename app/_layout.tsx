@@ -22,6 +22,7 @@ import {
   AndroidNearbyBroadcastRuntime,
   MESH_DEFAULT_TTL,
   getEnvelopeTtl,
+  isRangeEnvelope,
   isSosEnvelope,
   subscribeToBroadcasts,
 } from '../features/bluetooth';
@@ -76,6 +77,8 @@ export default function RootLayout() {
       void ensureSosIncomingCategory();
     } catch {}
     return subscribeToBroadcasts((broadcast) => {
+      // Device-search ranging pings are consumed only by that screen.
+      if (isRangeEnvelope(broadcast)) return;
       const lang = broadcastLangLabel(broadcast.language);
       const hops = broadcastHopCount(broadcast);
       const hopSuffix =

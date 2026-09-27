@@ -7,6 +7,7 @@ import {
   registerBroadcastSender,
   registerMeshDiscovery,
 } from './broadcast';
+import { registerRangeUnicast } from '../proximity/rangeBus';
 import { registerSosPingControl } from './sosPing';
 import type { BroadcastEnvelope } from './broadcast';
 import { useBleAdvertiser } from './useBleAdvertiser';
@@ -101,6 +102,7 @@ export default function AndroidNearbyBroadcastRuntime() {
     connectToDevice,
     ensurePeripheralListeners,
     sendBroadcastDetailed,
+    sendToDevice,
     connectedDeviceIds,
     peripheralCentralIds,
     isConnecting,
@@ -140,6 +142,8 @@ export default function AndroidNearbyBroadcastRuntime() {
         id: d.id,
         name: getDeviceDisplayName(d),
         rssi: d.rssi,
+        txPower:
+          typeof d.txPowerLevel === 'number' ? d.txPowerLevel : undefined,
       })),
     });
   }, [devices]);
@@ -147,6 +151,7 @@ export default function AndroidNearbyBroadcastRuntime() {
   useEffect(() => {
     publishMeshStatus({
       connectedCount: connectedDeviceIds.length + peripheralCentralIds.length,
+      connectedIds: [...connectedDeviceIds],
     });
   }, [connectedDeviceIds, peripheralCentralIds]);
 
@@ -501,6 +506,20 @@ export default function AndroidNearbyBroadcastRuntime() {
   }, []);
 
   useEffect(() => registerBroadcastSender(sendWhenReady), [sendWhenReady]);
+
+  const sendToDeviceRef = useRef(sendToDevice);
+  useEffect(() => {
+    sendToDeviceRef.current = sendToDevice;
+  }, [sendToDevice]);
+
+  // Device-search unicast: pings travel down ONE open link, never the flood
+  // bus. Unregisters on unmount.
+  useEffect(() => {
+    registerRangeUnicast((deviceId, envelope) =>
+      sendToDeviceRef.current(deviceId, envelope),
+    );
+    return () => registerRangeUnicast(null);
+  }, []);
 
   // Discovery-only round for the homepage "Refresh" button: short filtered
   // scan that publishes peers WITHOUT transmitting anything.
