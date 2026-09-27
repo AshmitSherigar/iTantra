@@ -56,6 +56,19 @@ const broadcastListeners = new Set<BroadcastListener>();
  * instead of alerting twice or relaying forever.
  */
 const seenBroadcastIds = new Set<string>();
+/** Bound the de-dup set so long-lived runtimes don't grow without limit. */
+const MAX_SEEN_BROADCAST_IDS = 1000;
+
+function pruneSeenBroadcastIds(): void {
+  if (seenBroadcastIds.size <= MAX_SEEN_BROADCAST_IDS) return;
+  const overflow = seenBroadcastIds.size - MAX_SEEN_BROADCAST_IDS;
+  const iterator = seenBroadcastIds.values();
+  for (let i = 0; i < overflow; i++) {
+    const next = iterator.next();
+    if (next.done) break;
+    seenBroadcastIds.delete(next.value);
+  }
+}
 
 export function makeBroadcastId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -156,7 +169,9 @@ export function hasSeenBroadcast(id: string): boolean {
 }
 
 export function markBroadcastSeen(id: string): void {
-  if (id) seenBroadcastIds.add(id);
+  if (!id) return;
+  seenBroadcastIds.add(id);
+  pruneSeenBroadcastIds();
 }
 
 export function encodeBroadcast(envelope: BroadcastEnvelope): string {
@@ -257,6 +272,7 @@ export function subscribeToBroadcasts(listener: BroadcastListener): () => void {
 export function emitBroadcast(envelope: BroadcastEnvelope): boolean {
   if (!envelope?.id || seenBroadcastIds.has(envelope.id)) return false;
   seenBroadcastIds.add(envelope.id);
+  pruneSeenBroadcastIds();
   broadcastListeners.forEach((listener) => {
     try {
       listener(envelope);
@@ -304,6 +320,12 @@ export type MeshStatus = {
   lastDelivered: number;
   /** Links attempted in the last flood round. */
   lastAttempted: number;
+  /** Wall-clock ms spent scanning in the last flood round (P0 timing). */
+  lastScanMs: number | null;
+  /** Wall-clock ms spent transmitting in the last flood round (P0 timing). */
+  lastTxMs: number | null;
+  /** Total wall-clock ms for the last flood round (scan+settle+tx). */
+  lastTotalMs: number | null;
 };
 
 type MeshStatusListener = (status: MeshStatus) => void;
@@ -316,6 +338,9 @@ let meshStatus: MeshStatus = {
   lastResult: null,
   lastDelivered: 0,
   lastAttempted: 0,
+  lastScanMs: null,
+  lastTxMs: null,
+  lastTotalMs: null,
 };
 
 const meshStatusListeners = new Set<MeshStatusListener>();

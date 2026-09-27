@@ -385,6 +385,7 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
       envelope: BroadcastEnvelope,
     ): Promise<{ delivered: number; attempted: number }> => {
       if (!envelope.message.trim()) return { delivered: 0, attempted: 0 };
+      const txStarted = Date.now();
       // Snapshot: state may change mid-flight, count what we tried now.
       const centrals = [...connectedDeviceIds];
       const centralSubscribers = peripheralCentralIds.length > 0;
@@ -432,6 +433,9 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
           console.log('Broadcast notify failed:', error);
         }
       }
+      console.log(
+        `[MeshTiming] tx id=${envelope.id} delivered=${delivered}/${attempted} txMs=${Date.now() - txStarted}`,
+      );
       return { delivered, attempted };
     },
     [
