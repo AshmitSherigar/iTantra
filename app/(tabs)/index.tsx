@@ -19,6 +19,7 @@ import {
   Eraser,
   Globe,
   Megaphone,
+  Radar,
   Radio,
   Siren,
   Square,
@@ -50,6 +51,7 @@ import {
   MESH_DEFAULT_TTL,
   getEnvelopeTtl,
   getMeshStatus,
+  isRangeEnvelope,
   isSosEnvelope,
   makeMeshEnvelope,
   requestMeshDiscovery,
@@ -160,6 +162,8 @@ export default function Index() {
   useEffect(
     () =>
       subscribeToBroadcasts((envelope) => {
+        // Device-search ranging pings never enter the inbox or speech.
+        if (isRangeEnvelope(envelope)) return;
         setMeshInbox((current) => {
           if (current.some((m) => m.id === envelope.id)) return current;
           return [
@@ -634,6 +638,27 @@ export default function Index() {
             style={[styles.sosLinkText, { color: colors.primary }]}
           >
             Launch Mission Mode
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          onPress={() => router.push('/device-search' as any)}
+          activeOpacity={0.7}
+          style={[
+            styles.sosLink,
+            {
+              backgroundColor: colors.primaryMuted,
+              borderColor: colors.glassBorder,
+            },
+          ]}
+        >
+          <Radar size={16} color={colors.primary} />
+          <Text
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            style={[styles.sosLinkText, { color: colors.primary }]}
+          >
+            Find a Nearby Device
           </Text>
         </TouchableOpacity>
 

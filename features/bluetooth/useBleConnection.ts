@@ -514,6 +514,36 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
     [sendBroadcastDetailed],
   );
 
+  /**
+   * Point-to-point send down ONE open central link (device-search ranging).
+   * Peripheral-side links can't be targeted (a notify reaches every
+   * subscribed central), so those resolve false and the caller falls back
+   * to a single-hop broadcast ping.
+   */
+  const sendToDevice = useCallback(
+    async (
+      deviceId: string,
+      envelope: BroadcastEnvelope,
+    ): Promise<boolean> => {
+      if (!deviceId || !envelope.message.trim()) return false;
+      if (!connectedDeviceIds.includes(deviceId)) return false;
+      try {
+        const payload = textToHex(encodeBroadcast(envelope));
+        await sendHexFramed(
+          payload,
+          (packetHex) => writeCentralPacket(deviceId, packetHex),
+          notifyPeripheralPacket,
+          { isCentral: true },
+        );
+        return true;
+      } catch (error) {
+        console.log('[Range] unicast send failed:', error);
+        return false;
+      }
+    },
+    [connectedDeviceIds, notifyPeripheralPacket, writeCentralPacket],
+  );
+
   const disconnectFromDevice = useCallback(async () => {
     if (connectedDeviceIds.length > 0) {
       await Promise.all(
@@ -563,5 +593,6 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
     sendTextOverBLE: sendText,
     sendBroadcast,
     sendBroadcastDetailed,
+    sendToDevice,
   };
 }

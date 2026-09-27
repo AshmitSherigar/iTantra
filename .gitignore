@@ -20,8 +20,6 @@ yarn-debug.*
 yarn-error.*
 
 # Environment / secrets
-.env
-.env.*
 !.env.example
 
 
@@ -44,9 +42,9 @@ yarn-error.*
 
 # IDEs
 .idea/
-.vscode/
 
 # Models
 assets/models/
 *.onnx
 
+config.bat
