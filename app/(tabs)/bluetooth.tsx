@@ -96,6 +96,9 @@ export default function BluetoothScreen() {
     enabled: ttsEnabled,
     setEnabled: setTtsEnabled,
     isSpeaking: ttsSpeaking,
+    isReady: ttsReady,
+    isLoading: ttsLoading,
+    error: ttsError,
     stop: stopTts,
     speakFullMessage,
     beginStream: ttsBeginStream,
@@ -660,14 +663,19 @@ export default function BluetoothScreen() {
                 : 'Transcribing speech...'}
             </Text>
           )}
-          {(voiceError || sttError) && !isVoiceRecording && !isTranscribing && (
-            <Text
-              style={[premium.hintLine, { color: colors.error }]}
-              numberOfLines={2}
-            >
-              {voiceError ?? `Speech model: ${sttError}`}
-            </Text>
-          )}
+          {(voiceError || sttError || ttsError) &&
+            !isVoiceRecording &&
+            !isTranscribing && (
+              <Text
+                style={[premium.hintLine, { color: colors.error }]}
+                numberOfLines={2}
+              >
+                {voiceError ??
+                  (sttError
+                    ? `Speech model: ${sttError}`
+                    : `Voice model: ${ttsError}`)}
+              </Text>
+            )}
 
           <View style={{ paddingHorizontal: Spacing.lg }}>
             <View
@@ -718,11 +726,11 @@ export default function BluetoothScreen() {
               >
                 {ttsSpeaking
                   ? 'Speaking...'
-                  : sttLoading
+                  : sttLoading || ttsLoading
                     ? 'Loading voice...'
-                    : sttReady
+                    : sttReady && ttsReady
                       ? 'Voice ready'
-                      : sttError
+                      : sttError || ttsError
                         ? 'Voice failed'
                         : 'Voice off'}
               </Text>

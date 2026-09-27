@@ -41,10 +41,17 @@ export function textToHex(text: string): string {
   return Buffer.from(text, 'utf-8').toString('hex').toLowerCase();
 }
 
-export function splitHexIntoPackets(hex: string): string[] {
+export function splitHexIntoPackets(
+  hex: string,
+  maxHexPerPacket: number = MAX_HEX_PER_PACKET,
+): string[] {
+  const size =
+    Number.isFinite(maxHexPerPacket) && maxHexPerPacket > 0
+      ? Math.floor(maxHexPerPacket)
+      : MAX_HEX_PER_PACKET;
   const packets: string[] = [];
-  for (let i = 0; i < hex.length; i += MAX_HEX_PER_PACKET) {
-    packets.push(hex.slice(i, i + MAX_HEX_PER_PACKET));
+  for (let i = 0; i < hex.length; i += size) {
+    packets.push(hex.slice(i, i + size));
   }
   return packets;
 }

@@ -175,7 +175,26 @@ export function markBroadcastSeen(id: string): void {
 }
 
 export function encodeBroadcast(envelope: BroadcastEnvelope): string {
-  return JSON.stringify(envelope);
+  // Compact form: omit defaults the decoder already fills in (ttl=5,
+  // kind='normal'). Saves ~25B (~1+ 20B packets) with zero wire break —
+  // old builds ignore unknown/missing fields the same way.
+  const out: Record<string, unknown> = {
+    type: envelope.type,
+    id: envelope.id,
+    senderName: envelope.senderName,
+    message: envelope.message,
+    language: envelope.language,
+  };
+  if (
+    typeof envelope.ttl === 'number' &&
+    Number.isFinite(envelope.ttl) &&
+    Math.floor(envelope.ttl) !== MESH_DEFAULT_TTL
+  ) {
+    out.ttl = Math.floor(envelope.ttl);
+  }
+  if (envelope.kind === 'sos') out.kind = 'sos';
+  if (envelope.sos !== undefined) out.sos = envelope.sos;
+  return JSON.stringify(out);
 }
 
 export function decodeBroadcast(text: string): BroadcastEnvelope | null {

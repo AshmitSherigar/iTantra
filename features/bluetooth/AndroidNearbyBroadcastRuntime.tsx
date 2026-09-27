@@ -7,6 +7,7 @@ import {
   registerBroadcastSender,
   registerMeshDiscovery,
 } from './broadcast';
+import { registerSosPingControl } from './sosPing';
 import type { BroadcastEnvelope } from './broadcast';
 import { useBleAdvertiser } from './useBleAdvertiser';
 import { useBleConnection } from './useBleConnection';
@@ -82,7 +83,7 @@ export default function AndroidNearbyBroadcastRuntime() {
   >(Promise.resolve({ delivered: 0, attempted: 0 }));
   const scanActiveRef = useRef(false);
 
-  const { startBluetooth, stopBluetooth } = useBleAdvertiser();
+  const { startBluetooth, stopBluetooth, setSosPing } = useBleAdvertiser();
   const {
     setMessages,
     addMessage,
@@ -127,6 +128,10 @@ export default function AndroidNearbyBroadcastRuntime() {
   useEffect(() => {
     startRuntimeRef.current = startRuntime;
   }, [startRuntime]);
+
+  // SOS ping transmit control: SOS senders publish adv hex without owning
+  // the advertiser. Unregisters on unmount.
+  useEffect(() => registerSosPingControl(setSosPing), [setSosPing]);
 
   // Keep the homepage "N nearby" + link count fresh.
   useEffect(() => {

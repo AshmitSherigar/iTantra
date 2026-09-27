@@ -12,12 +12,16 @@ import * as Device from 'expo-device';
 
 import {
   MESH_DEFAULT_TTL,
+  activateSosPing,
+  encodeSosPingForEnvelope,
   getEnvelopeTtl,
   isSosEnvelope,
   makeSosEnvelope,
+  markSosPingResolved,
   requestMeshDiscovery,
   sendNearbyBroadcast,
   subscribeToBroadcasts,
+  subscribeToSosPing,
 } from '../features/bluetooth';
 import type { BroadcastEnvelope } from '../features/bluetooth';
 import { useLanguage } from './LanguageContext';
@@ -187,6 +191,9 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
             ...current,
           ].slice(0, 30);
         });
+        try {
+          markSosPingResolved(envelope.id);
+        } catch {}
         if (alertedSosIdsRef.current.has(envelope.id)) return;
         alertedSosIdsRef.current.add(envelope.id);
         // Siren first (instant replay of preloaded sound), notification
@@ -199,6 +206,26 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
           '🆘 SOS Emergency',
           `${envelope.senderName}: ${envelope.message}`.slice(0, 240),
         );
+      }),
+    [],
+  );
+
+  // Connectionless SOS tripwire: a ping arrives with zero GATT connect.
+  // Show a provisional hint + accelerate GATT discovery so the full
+  // envelope lands in ~1s. The full inbox/siren path (above) takes over
+  // on arrival; pings never alert on their own.
+  useEffect(
+    () =>
+      subscribeToSosPing((ping) => {
+        console.log(
+          `[SOS-Timing] ping provisional shortId=${ping.shortId} rssi=${ping.rssi}`,
+        );
+        setLastResult(
+          '🆘 SOS detected nearby — receiving details… Keep the app open.',
+        );
+        try {
+          void requestMeshDiscovery().catch(() => {});
+        } catch {}
       }),
     [],
   );
@@ -286,6 +313,11 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
         language: langRef.current,
         sos: sosMeta,
       });
+      // Connectionless tripwire first: nearby phones see SOS in <1s with
+      // zero GATT connect while the full flood connects. Auto-clears.
+      try {
+        activateSosPing(encodeSosPingForEnvelope(envelope));
+      } catch {}
       for (let attempt = 1; attempt <= RETRY_ROUNDS; attempt += 1) {
         if (attempt > 1) {
           const gap = RETRY_GAPS_MS[attempt - 1] ?? 5000;

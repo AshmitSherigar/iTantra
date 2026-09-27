@@ -6,6 +6,7 @@ import {
   setServices,
   startAdvertising,
   stopAdvertising,
+  updateAdvertisingData,
 } from 'react-native-bluetooth-ble';
 import {
   MAX_ADVERTISED_NAME_LEN,
@@ -35,6 +36,10 @@ export function useBleAdvertiser() {
   const [isStartingBt, setIsStartingBt] = useState(false);
   const advertisedNameRef = useRef<string | null>(null);
   const startingRef = useRef(false);
+  // Active SOS ping hex (serviceData128) or null. Applied via
+  // updateAdvertisingData without restarting advertising; re-applied after
+  // any restart (name change) so the ping survives it.
+  const sosPingHexRef = useRef<string | null>(null);
 
   useEffect(() => {
     const fallback =
@@ -44,6 +49,33 @@ export function useBleAdvertiser() {
     setDisplayName((prev) => prev || fallback.slice(0, 20));
   }, []);
 
+  const applySosPingLocked = useCallback(() => {
+    const name = advertisedNameRef.current;
+    if (!name) return;
+    const pingHex = sosPingHexRef.current;
+    try {
+      updateAdvertisingData({
+        completeLocalName: name,
+        completeServiceUUIDs128: [SERVICE_UUID],
+        ...(pingHex
+          ? { serviceData128: [{ uuid: SERVICE_UUID, data: pingHex }] }
+          : {}),
+      });
+      console.log(`[SosPing] adv ${pingHex ? 'active' : 'cleared'}`);
+    } catch (error) {
+      console.log('[SosPing] updateAdvertisingData failed:', error);
+    }
+  }, []);
+
+  const setSosPing = useCallback(
+    (hex: string | null) => {
+      sosPingHexRef.current = hex && hex.length > 0 ? hex : null;
+      if (!advertisedNameRef.current) return;
+      applySosPingLocked();
+    },
+    [applySosPingLocked],
+  );
+
   const stopBluetooth = useCallback(() => {
     try {
       stopAdvertising();
@@ -51,6 +83,7 @@ export function useBleAdvertiser() {
       console.log('Stop advertising error:', error);
     }
     advertisedNameRef.current = null;
+    sosPingHexRef.current = null;
     setAdvertisedName(null);
     setBluetoothReady(false);
     console.log('BLUETOOTH STOPPED');
@@ -122,6 +155,12 @@ export function useBleAdvertiser() {
       setAdvertisedName(nameToAdvertise);
       setBluetoothReady(true);
       console.log('BLUETOOTH READY as', nameToAdvertise);
+      // Re-apply an in-flight SOS ping after (re)start.
+      if (sosPingHexRef.current) {
+        try {
+          applySosPingLocked();
+        } catch {}
+      }
     } catch (error) {
       const msg =
         'Bluetooth setup failed. Make sure Bluetooth is on and try again.';
@@ -131,7 +170,13 @@ export function useBleAdvertiser() {
       startingRef.current = false;
       setIsStartingBt(false);
     }
-  }, [bluetoothReady, displayName, isStartingBt, stopBluetooth]);
+  }, [
+    applySosPingLocked,
+    bluetoothReady,
+    displayName,
+    isStartingBt,
+    stopBluetooth,
+  ]);
 
   return {
     displayName,
@@ -142,5 +187,6 @@ export function useBleAdvertiser() {
     isStartingBt,
     startBluetooth,
     stopBluetooth,
+    setSosPing,
   };
 }

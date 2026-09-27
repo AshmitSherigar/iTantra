@@ -12,6 +12,7 @@ import {
   mergeScannedDevice,
   type ScannedDevice,
 } from './devices';
+import { decodeSosPingFromDevice, emitSosPingObserved } from './sosPing';
 
 type UseBleScannerOpts = {
   isChatConnected: boolean;
@@ -80,6 +81,19 @@ export function useBleScanner({ isChatConnected }: UseBleScannerOpts) {
       if (!isVaaniSetuDevice(found, SERVICE_UUID)) {
         return;
       }
+      // Connectionless SOS tripwire: decode before any GATT work. Emits at
+      // most once per shortId per 30s; GATT flood stays the source of truth.
+      try {
+        const ping = decodeSosPingFromDevice(found, SERVICE_UUID);
+        if (ping) {
+          const isNew = emitSosPingObserved(found.id, found.rssi, ping);
+          if (isNew) {
+            console.log(
+              `[SosPing] observed shortId=${ping.shortId} ttl=${ping.ttl} from ${found.id} rssi=${found.rssi}`,
+            );
+          }
+        }
+      } catch {}
       console.log(
         'VaaniSetu device found:',
         getDeviceDisplayName(found),

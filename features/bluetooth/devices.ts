@@ -4,9 +4,15 @@ export type ScannedDevice = {
   localName?: string;
   rssi?: number;
   serviceUUIDs?: string[];
+  serviceData?: { uuid?: string; data?: string }[];
+  manufacturerData?: string;
   advertisingData?: {
     completeLocalName?: string;
     shortenedLocalName?: string;
+    serviceData128?: { uuid?: string; data?: string }[];
+    serviceData32?: { uuid?: string; data?: string }[];
+    serviceData16?: { uuid?: string; data?: string }[];
+    manufacturerData?: string;
     [key: string]: unknown;
   };
   [key: string]: unknown;
@@ -124,5 +130,8 @@ export function mergeScannedDevice(
 
   if (next?.rssi !== undefined) merged.rssi = next.rssi;
   if (next?.serviceUUIDs !== undefined) merged.serviceUUIDs = next.serviceUUIDs;
+  if (next?.serviceData !== undefined) merged.serviceData = next.serviceData;
+  if (next?.manufacturerData !== undefined)
+    merged.manufacturerData = next.manufacturerData;
   return merged;
 }
