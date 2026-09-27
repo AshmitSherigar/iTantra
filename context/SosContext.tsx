@@ -533,17 +533,11 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
         : 60 * 1000;
       const startedAt = Date.now();
       const deadlineAt = startedAt + safeDurationMs;
-      let lat: number | undefined;
-      let lon: number | undefined;
-      if (input.includeLocation) {
-        try {
-          const loc = await tryGetLocation(5000);
-          if (loc) {
-            lat = loc.lat;
-            lon = loc.lon;
-          }
-        } catch {}
-      }
+      // Arm instantly: location fetch (up to 5s) used to block the tap, so a
+      // single press felt dead and users had to leave/reopen to see the
+      // timer. Persist + publish the timer first, then patch location in
+      // the background. Fire-time refresh (fireExpiredTimer) remains the
+      // primary location source, so this snapshot is only a fallback.
       // Schedule OS notifications BEFORE persisting so a kill right after
       // Start still leaves warnings + deadline alert behind.
       const notificationIds = await scheduleTimerNotifications({
@@ -559,8 +553,8 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
         helpMessage: (input.helpMessage ?? '').trim(),
         workspaceLabel: (input.workspaceLabel ?? '').trim(),
         includeLocation: input.includeLocation,
-        lat,
-        lon,
+        lat: undefined,
+        lon: undefined,
         notificationIds,
       };
       await saveActiveTimer(timer);
@@ -578,6 +572,22 @@ export function SosProvider({ children }: { children: React.ReactNode }) {
           : `Timer armed - SOS auto-sends at ${new Date(deadlineAt).toLocaleTimeString()} unless you tap I'm Safe. (Background keeper unavailable - keep app open or tap the deadline notification.)`,
       );
       setPendingRetry(null);
+      // Background location patch (SOS-only location): only applies while
+      // this same timer is still active.
+      if (input.includeLocation) {
+        try {
+          const loc = await tryGetLocation(5000);
+          if (loc && activeTimerRef.current?.id === timer.id) {
+            const patched: SosTimerState = {
+              ...timer,
+              lat: loc.lat,
+              lon: loc.lon,
+            };
+            await saveActiveTimer(patched);
+            setActiveTimer(patched);
+          }
+        } catch {}
+      }
     },
     [],
   );

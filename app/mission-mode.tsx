@@ -27,7 +27,6 @@ import {
 } from '@/features/bluetooth';
 import { useVoiceMessage } from '@/features/audio/useVoiceMessage';
 import { formatRemaining } from '@/features/sos';
-import { tryGetLocation } from '@/features/sos/location';
 import { isLanguageInstalled } from '@/features/models/languages';
 
 import ScreenHeader from '@/components/ui/ScreenHeader';
@@ -59,12 +58,34 @@ type TranscriptEntry = {
   mine: boolean;
 };
 
-function appendGps(
-  text: string,
-  coords: { lat: number; lon: number } | null,
-): string {
-  if (!coords) return text;
-  return `${text} [📍 ${coords.lat.toFixed(4)},${coords.lon.toFixed(4)}]`;
+/** Dual-transport (WiFi + BLE) delivers the same voice text twice — once per
+ *  link — so collapse same-sender + same-text entries arriving within a few
+ *  seconds into one row. Window is deliberately small so intentional repeats
+ *  typed seconds apart still show. */
+const DUPLICATE_WINDOW_MS = 5000;
+
+function dedupeTranscript(sorted: TranscriptEntry[]): TranscriptEntry[] {
+  const kept: TranscriptEntry[] = [];
+  for (const entry of sorted) {
+    const text = entry.text.trim();
+    // Look back a few rows: the WiFi + BLE copies of one transmission land
+    // milliseconds apart but another message can slip between them.
+    let isDuplicate = false;
+    for (let i = kept.length - 1; i >= 0 && i >= kept.length - 4; i -= 1) {
+      const prev = kept[i];
+      if (
+        prev.mine === entry.mine &&
+        prev.sender === entry.sender &&
+        prev.text.trim() === text &&
+        Math.abs(entry.ts - prev.ts) <= DUPLICATE_WINDOW_MS
+      ) {
+        isDuplicate = true;
+        break;
+      }
+    }
+    if (!isDuplicate) kept.push(entry);
+  }
+  return kept;
 }
 
 export default function MissionModeScreen() {
@@ -119,6 +140,9 @@ export default function MissionModeScreen() {
     message: string;
   } | null>(null);
   const [connectingBle, setConnectingBle] = useState(false);
+  /** Guards the Arm-timer tap: startTimer is async, so without this a second
+   *  tap fires a concurrent arming round and the first-tap UI looks dead. */
+  const [isArming, setIsArming] = useState(false);
   const [connectingAddress, setConnectingAddress] = useState<string | null>(
     null,
   );
@@ -214,7 +238,8 @@ export default function MissionModeScreen() {
       ts: m.ts,
       mine: m.sender === 'me',
     }));
-    return [...wifiEntries, ...bleEntries].sort((a, b) => a.ts - b.ts);
+    const sorted = [...wifiEntries, ...bleEntries].sort((a, b) => a.ts - b.ts);
+    return dedupeTranscript(sorted);
   }, [wifiMessages, session.bleMessages]);
 
   const handlePttPressIn = useCallback(async () => {
@@ -232,11 +257,32 @@ export default function MissionModeScreen() {
   const handlePttPressOut = useCallback(async () => {
     const text = await stopVoice();
     if (!text) return;
-    const location = await tryGetLocation();
-    const outgoing = appendGps(text, location);
+    // Mesh chat carries voice text only — location is SOS-timer-only.
+    const outgoing = text.trim();
+    if (!outgoing) return;
     broadcast(outgoing);
     void bleSendBroadcast(outgoing);
   }, [stopVoice, broadcast, bleSendBroadcast]);
+
+  const handleArmSos = useCallback(async () => {
+    if (isArming || activeTimer) return;
+    setIsArming(true);
+    try {
+      await startTimer({
+        durationMs: 30 * 60 * 1000,
+        helpMessage: 'Mission Mode check-in overdue',
+        workspaceLabel: 'Mission Mode',
+        includeLocation: true,
+      });
+    } catch (e) {
+      console.warn('[MissionMode] arm timer failed:', e);
+      await showAppAlert('Could not arm timer', 'Please try again.', [
+        { text: 'OK' },
+      ]);
+    } finally {
+      setIsArming(false);
+    }
+  }, [isArming, activeTimer, startTimer]);
 
   const handleConnectAll = useCallback(async () => {
     startHosting();
@@ -381,22 +427,26 @@ export default function MissionModeScreen() {
         ) : (
           <AnimatedListItem index={0}>
             <TouchableOpacity
-              style={[styles.armSos, { borderColor: colors.border }]}
-              onPress={() =>
-                void startTimer({
-                  durationMs: 30 * 60 * 1000,
-                  helpMessage: 'Mission Mode check-in overdue',
-                  workspaceLabel: 'Mission Mode',
-                  includeLocation: true,
-                })
-              }
+              style={[
+                styles.armSos,
+                { borderColor: colors.border, opacity: isArming ? 0.6 : 1 },
+              ]}
+              onPress={() => void handleArmSos()}
+              disabled={isArming || !!activeTimer}
               activeOpacity={0.85}
             >
-              <Text
-                style={[Typography.bodyMedium, { color: colors.textSecondary }]}
-              >
-                Arm 30-min safety timer
-              </Text>
+              {isArming ? (
+                <ActivityIndicator size="small" color={colors.textSecondary} />
+              ) : (
+                <Text
+                  style={[
+                    Typography.bodyMedium,
+                    { color: colors.textSecondary },
+                  ]}
+                >
+                  Arm 30-min safety timer
+                </Text>
+              )}
             </TouchableOpacity>
           </AnimatedListItem>
         )}
@@ -418,7 +468,7 @@ export default function MissionModeScreen() {
         </View>
 
         <View style={{ marginTop: Spacing.lg }}>
-          <SectionHeader overline={`Transcript · ${transcript.length}`} />
+          <SectionHeader overline={`Mesh Chat · ${transcript.length}`} />
           <GlassCard style={{ minHeight: 120 }}>
             {transcript.length === 0 ? (
               <Text style={[Typography.body, { color: colors.textSecondary }]}>
