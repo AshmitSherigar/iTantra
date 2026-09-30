@@ -15,6 +15,9 @@
       "autoIncrement": true,
       "android": {
         "buildType": "app-bundle"
+      },
+      "env": {
+        "SHERPA_ASSET_PACK": "1"
       }
     }
   },

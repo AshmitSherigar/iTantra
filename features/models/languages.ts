@@ -156,3 +156,32 @@ export function ttsPathFor(id: LanguageId): string {
     getLanguage(DEFAULT_LANGUAGE_ID).ttsAssetPath!
   );
 }
+
+/**
+ * Guess which voice can pronounce `text` from its Unicode script.
+ *
+ * Only en/hi/kn ship TTS models, and their token sets are disjoint: the
+ * Hindi/Kannada token files contain no Latin letters, and the English one
+ * contains no Indic script. So detection maps Devanagari → Hindi, Kannada
+ * script → Kannada, everything else → `fallbackId` (default English — the
+ * only bundled voice that can pronounce Latin text; routing Latin text to
+ * the Hindi/Kannada voice is silence, not an accent). The 1-to-1 chat has
+ * no language envelope on the wire, but STT output script matches the
+ * sender's STT language essentially always (Hindi model → Devanagari,
+ * etc.), so for voice messages this equals the sender's language.
+ */
+export function detectSpokenLanguage(
+  text: string,
+  fallbackId: LanguageId = DEFAULT_LANGUAGE_ID,
+): LanguageId {
+  if (!text) return fallbackId;
+  let devanagari = 0;
+  let kannada = 0;
+  for (const ch of text) {
+    const cp = ch.codePointAt(0) ?? 0;
+    if (cp >= 0x0900 && cp <= 0x097f) devanagari += 1;
+    else if (cp >= 0x0c80 && cp <= 0x0cff) kannada += 1;
+  }
+  if (devanagari === 0 && kannada === 0) return fallbackId;
+  return kannada > devanagari ? 'kn' : 'hi';
+}

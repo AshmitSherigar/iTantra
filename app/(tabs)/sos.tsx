@@ -1,7 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
   Linking,
   ScrollView,
   StyleSheet,
@@ -12,16 +10,45 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import {
+  CheckCircle2,
+  Clock,
+  Map,
+  MapPin,
+  ShieldCheck,
+  Siren,
+  Square,
+  TriangleAlert,
+  Volume2,
+} from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { useTheme } from '../../context/ThemeContext';
 import { useSos } from '../../context/SosContext';
-import { SOS_PRESETS, formatRemaining } from '../../features/sos';
-import { extractMapUrl } from '../../features/sos/links';
-import LinkifiedMessage from '../../features/sos/LinkifiedMessage';
-import { FontSize, Radius, Spacing } from '../../constants/theme';
+import {
+  SOS_PRESETS,
+  ensureSosLocationPermission,
+  formatRemaining,
+} from '../../features/sos';
+import { preloadSosSiren } from '../../features/sos/siren';
+import { requestMeshDiscovery } from '../../features/bluetooth';
+import {
+  resolveSosMapUrl,
+  stripUrlsForDisplay,
+} from '../../features/sos/links';
+import GlassCard from '@/components/ui/GlassCard';
+import SpringButton from '@/components/ui/SpringButton';
+import CircleButton from '@/components/ui/CircleButton';
+import ScreenHeader from '@/components/ui/ScreenHeader';
+import AnimatedListItem from '@/components/ui/AnimatedListItem';
+import SectionHeader from '@/components/ui/SectionHeader';
+import { showAppAlert } from '@/components/ui/AppModal';
+import { Radius, Spacing, Typography } from '../../constants/theme';
+
+function hopLabel(hops: number): string {
+  if (hops <= 0) return 'direct';
+  return hops === 1 ? '1 hop' : `${hops} hops`;
+}
 
 export default function SosScreen() {
   const { colors } = useTheme();
@@ -53,35 +80,6 @@ export default function SosScreen() {
   const [includeLocation, setIncludeLocation] = useState(true);
   const [isStarting, setIsStarting] = useState(false);
 
-  // Calm-moment prep: remember the SOS message setup so there's no typing
-  // during an emergency. Set once, reused every time.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const raw = await AsyncStorage.getItem('sos:compose-v1');
-        if (!raw || cancelled) return;
-        const saved = JSON.parse(raw);
-        if (typeof saved.helpMessage === 'string')
-          setHelpMessage(saved.helpMessage.slice(0, 280));
-        if (typeof saved.workspaceLabel === 'string')
-          setWorkspaceLabel(saved.workspaceLabel.slice(0, 60));
-        if (typeof saved.includeLocation === 'boolean')
-          setIncludeLocation(saved.includeLocation);
-      } catch {}
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    AsyncStorage.setItem(
-      'sos:compose-v1',
-      JSON.stringify({ helpMessage, workspaceLabel, includeLocation }),
-    ).catch(() => {});
-  }, [helpMessage, workspaceLabel, includeLocation]);
-
   const effectiveMinutes = useMemo(() => {
     if (useCustom) {
       const n = parseInt(customMinutes, 10);
@@ -99,7 +97,6 @@ export default function SosScreen() {
   const progress = useMemo(() => {
     if (!activeTimer) return 0;
     const total = activeTimer.durationMs;
-    // Guard NaN/corrupt values: an invalid width ("NaN%") crashes layout.
     if (
       !Number.isFinite(total) ||
       total <= 0 ||
@@ -112,9 +109,9 @@ export default function SosScreen() {
 
   async function handleStartTimer() {
     if (!canStart) {
-      Alert.alert(
+      await showAppAlert(
         'Pick a duration',
-        'Choose a preset or enter custom minutes (1–1440).',
+        'Choose a preset or enter custom minutes (1-1440).',
         [{ text: 'OK' }],
       );
       return;
@@ -134,7 +131,7 @@ export default function SosScreen() {
       } catch {}
     } catch (e) {
       console.warn('[SOS] start failed:', e);
-      Alert.alert('Could not start timer', 'Please try again.', [
+      await showAppAlert('Could not start timer', 'Please try again.', [
         { text: 'OK' },
       ]);
     } finally {
@@ -143,13 +140,13 @@ export default function SosScreen() {
   }
 
   function handleSafe() {
-    Alert.alert(
+    void showAppAlert(
       "You're safe?",
       'This cancels the timer. No SOS will be sent.',
       [
         { text: 'Keep timer', style: 'cancel' },
         {
-          text: "I'm Safe — Cancel",
+          text: "I'm Safe - Cancel",
           style: 'destructive',
           onPress: () => void cancelTimer(),
         },
@@ -158,7 +155,18 @@ export default function SosScreen() {
   }
 
   function handleManualSos() {
-    Alert.alert(
+    // Pre-warm while the user reads the confirm dialog: BLE discovery,
+    // location permission, and siren load all happen before SEND is tapped.
+    try {
+      void requestMeshDiscovery().catch(() => {});
+    } catch {}
+    try {
+      void ensureSosLocationPermission().catch(() => {});
+    } catch {}
+    try {
+      preloadSosSiren();
+    } catch {}
+    void showAppAlert(
       'Send SOS now?',
       'This broadcasts SOS to ALL nearby VaaniSetu phones immediately (3 flood tries).',
       [
@@ -180,383 +188,417 @@ export default function SosScreen() {
     );
   }
 
+  function handleClearInbox() {
+    if (inbox.length === 0) return;
+    void showAppAlert(
+      'Clear received SOS?',
+      'This removes all SOS messages here.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Clear', style: 'destructive', onPress: clearInbox },
+      ],
+    );
+  }
+
   return (
     <SafeAreaView
       style={[styles.container, { backgroundColor: colors.background }]}
-      edges={['top', 'bottom']}
+      edges={['top']}
     >
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.header}>
-          <View>
-            <Text style={[styles.title, { color: colors.text }]}>
-              SOS Timer
-            </Text>
-            <Text style={[styles.muted, { color: colors.textSecondary }]}>
-              Miss check-in → SOS goes to nearby phones.
-            </Text>
-          </View>
-          <View
-            style={[
-              styles.livePill,
-              {
-                backgroundColor: activeTimer ? colors.error : colors.surface,
-                borderColor: colors.border,
-              },
-            ]}
-          >
-            <View
-              style={[
-                styles.liveDot,
-                { backgroundColor: activeTimer ? '#FFFFFF' : colors.success },
-              ]}
-            />
-            <Text
-              style={[
-                styles.liveText,
-                { color: activeTimer ? '#FFFFFF' : colors.textSecondary },
-              ]}
+        <ScreenHeader
+          title={activeTimer ? formatRemaining(remainingMs) : 'SOS'}
+          subtitle={
+            activeTimer
+              ? `Auto-SOS at ${new Date(activeTimer.deadlineAt).toLocaleTimeString()}${activeTimer.workspaceLabel ? ` • ${activeTimer.workspaceLabel}` : ''}`
+              : 'Alert nearby phones in an emergency'
+          }
+          left={
+            <CircleButton
+              onPress={() => void testSiren()}
+              accessibilityLabel="Test SOS siren"
             >
-              {activeTimer ? 'ARMED' : 'READY'}
-            </Text>
-          </View>
-        </View>
+              <Volume2 size={20} color={colors.text} />
+            </CircleButton>
+          }
+          right={
+            <CircleButton
+              onPress={() => void stopSiren()}
+              accessibilityLabel="Stop SOS siren"
+            >
+              <Square
+                size={18}
+                color={sirenPlaying ? colors.error : colors.textSecondary}
+                fill={sirenPlaying ? colors.error : colors.textSecondary}
+              />
+            </CircleButton>
+          }
+        />
 
-        {/* Active timer card */}
         {activeTimer ? (
-          <View
-            style={[
-              styles.card,
-              { backgroundColor: colors.surface, borderColor: colors.error },
-            ]}
-          >
-            <View style={styles.timerTop}>
-              <Ionicons name="timer-outline" size={22} color={colors.error} />
-              <Text style={[styles.timerCountdown, { color: colors.text }]}>
-                {formatRemaining(remainingMs)}
-              </Text>
-            </View>
-            <Text style={[styles.muted, { color: colors.textSecondary }]}>
-              Auto-SOS at{' '}
-              {new Date(activeTimer.deadlineAt).toLocaleTimeString()}
-              {activeTimer.workspaceLabel
-                ? ` • ${activeTimer.workspaceLabel}`
-                : ''}
-            </Text>
-            {activeTimer.helpMessage ? (
-              <Text
-                style={[styles.helpPreview, { color: colors.text }]}
-                numberOfLines={3}
-              >
-                “{activeTimer.helpMessage}”
-              </Text>
-            ) : null}
-            <View style={styles.progressTrack}>
+          <AnimatedListItem index={0}>
+            <GlassCard>
               <View
                 style={[
-                  styles.progressFill,
-                  {
-                    width: `${Math.round(progress * 100)}%`,
-                    backgroundColor: colors.error,
-                  },
-                ]}
-              />
-            </View>
-            <TouchableOpacity
-              style={[styles.safeButton, { backgroundColor: colors.success }]}
-              onPress={handleSafe}
-              activeOpacity={0.85}
-              accessibilityRole="button"
-              accessibilityLabel="I am safe, cancel SOS timer"
-            >
-              <Ionicons name="checkmark-circle" size={20} color="#FFFFFF" />
-              <Text style={styles.safeButtonText}>
-                I&apos;m Safe — Cancel SOS
-              </Text>
-            </TouchableOpacity>
-            <View style={styles.extendRow}>
-              <TouchableOpacity
-                style={[
-                  styles.extendButton,
+                  styles.progressTrack,
                   { backgroundColor: colors.inputBackground },
                 ]}
-                onPress={() => void extendTimer(15 * 60 * 1000)}
-                activeOpacity={0.8}
               >
-                <Text style={[styles.extendText, { color: colors.text }]}>
-                  +15 min
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.extendButton,
-                  { backgroundColor: colors.inputBackground },
-                ]}
-                onPress={() => void extendTimer(60 * 60 * 1000)}
-                activeOpacity={0.8}
-              >
-                <Text style={[styles.extendText, { color: colors.text }]}>
-                  +1 hour
-                </Text>
-              </TouchableOpacity>
-            </View>
-            <Text style={[styles.finePrint, { color: colors.textSecondary }]}>
-              Keep the SOS notification — don&apos;t swipe it away.
-            </Text>
-          </View>
-        ) : (
-          <View
-            style={[
-              styles.card,
-              { backgroundColor: colors.surface, borderColor: colors.border },
-            ]}
-          >
-            <Text style={[styles.cardTitle, { color: colors.text }]}>
-              Safety timer
-            </Text>
-            <Text style={[styles.muted, { color: colors.textSecondary }]}>
-              Miss check-in → SOS auto-sends.
-            </Text>
-
-            <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
-              DURATION
-            </Text>
-            <View style={styles.presetRow}>
-              {SOS_PRESETS.map((p) => {
-                const selected = !useCustom && presetMinutes === p.minutes;
-                return (
-                  <TouchableOpacity
-                    key={p.minutes}
-                    style={[
-                      styles.preset,
-                      {
-                        backgroundColor: selected
-                          ? colors.primary
-                          : colors.inputBackground,
-                        borderColor: colors.border,
-                      },
-                    ]}
-                    onPress={() => {
-                      setUseCustom(false);
-                      setPresetMinutes(p.minutes);
-                    }}
-                    activeOpacity={0.8}
-                  >
-                    <Text
-                      style={[
-                        styles.presetText,
-                        { color: selected ? '#FFFFFF' : colors.text },
-                      ]}
-                    >
-                      {p.label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-            <View style={styles.customRow}>
-              <TouchableOpacity
-                style={[
-                  styles.preset,
-                  {
-                    backgroundColor: useCustom
-                      ? colors.primary
-                      : colors.inputBackground,
-                    borderColor: colors.border,
-                    flex: 0,
-                    paddingHorizontal: 14,
-                  },
-                ]}
-                onPress={() => setUseCustom(true)}
-                activeOpacity={0.8}
-              >
-                <Text
+                <View
                   style={[
-                    styles.presetText,
-                    { color: useCustom ? '#FFFFFF' : colors.text },
+                    styles.progressFill,
+                    {
+                      width: `${Math.round(progress * 100)}%`,
+                      backgroundColor: colors.error,
+                    },
+                  ]}
+                />
+              </View>
+              {activeTimer.helpMessage ? (
+                <View
+                  style={[
+                    styles.quoteBox,
+                    { backgroundColor: colors.inputBackground },
                   ]}
                 >
-                  Custom
+                  <Text
+                    style={[styles.helpPreview, { color: colors.text }]}
+                    numberOfLines={3}
+                  >
+                    &quot;{activeTimer.helpMessage}&quot;
+                  </Text>
+                </View>
+              ) : null}
+              <SpringButton
+                title="I'm Safe - Cancel SOS"
+                variant="emerald"
+                onPress={handleSafe}
+                icon={<CheckCircle2 size={18} color="#FFF" />}
+                style={{ marginTop: 12 }}
+              />
+              <View style={styles.extendRow}>
+                <TouchableOpacity
+                  style={[
+                    styles.extendButton,
+                    { backgroundColor: colors.inputBackground },
+                  ]}
+                  onPress={() => void extendTimer(15 * 60 * 1000)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.extendText, { color: colors.text }]}>
+                    +15 min
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.extendButton,
+                    { backgroundColor: colors.inputBackground },
+                  ]}
+                  onPress={() => void extendTimer(60 * 60 * 1000)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.extendText, { color: colors.text }]}>
+                    +1 hour
+                  </Text>
+                </TouchableOpacity>
+              </View>
+              <Text style={[styles.finePrint, { color: colors.textSecondary }]}>
+                Fires in background via the &quot;SOS timer armed&quot;
+                notification - don&apos;t swipe it away.
+              </Text>
+            </GlassCard>
+          </AnimatedListItem>
+        ) : (
+          <AnimatedListItem index={0}>
+            <GlassCard>
+              <View style={styles.cardTitleRow}>
+                <ShieldCheck size={20} color={colors.primary} />
+                <Text style={[Typography.h3, { color: colors.text }]}>
+                  Arm a safety timer
                 </Text>
-              </TouchableOpacity>
+              </View>
+              <Text style={[styles.muted, { color: colors.textSecondary }]}>
+                Miss the check-in and SOS auto-broadcasts with your message +
+                location.
+              </Text>
+
+              <Text
+                style={[styles.fieldLabel, { color: colors.textSecondary }]}
+              >
+                Duration
+              </Text>
+              <View style={styles.presetRow}>
+                {SOS_PRESETS.map((p) => {
+                  const selected = !useCustom && presetMinutes === p.minutes;
+                  return (
+                    <TouchableOpacity
+                      key={p.minutes}
+                      style={[
+                        styles.preset,
+                        {
+                          backgroundColor: selected
+                            ? colors.text
+                            : colors.inputBackground,
+                          borderColor: selected
+                            ? colors.text
+                            : colors.glassBorder,
+                        },
+                      ]}
+                      onPress={() => {
+                        setUseCustom(false);
+                        setPresetMinutes(p.minutes);
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <Text
+                        style={[
+                          styles.presetText,
+                          {
+                            color: selected ? colors.background : colors.text,
+                          },
+                        ]}
+                      >
+                        {p.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              <View style={styles.customRow}>
+                <TouchableOpacity
+                  style={[
+                    styles.preset,
+                    {
+                      backgroundColor: useCustom
+                        ? colors.text
+                        : colors.inputBackground,
+                      borderColor: useCustom ? colors.text : colors.glassBorder,
+                      flex: 0,
+                      paddingHorizontal: 14,
+                    },
+                  ]}
+                  onPress={() => setUseCustom(true)}
+                  activeOpacity={0.8}
+                >
+                  <Text
+                    style={[
+                      styles.presetText,
+                      {
+                        color: useCustom ? colors.background : colors.text,
+                      },
+                    ]}
+                  >
+                    Custom
+                  </Text>
+                </TouchableOpacity>
+                <TextInput
+                  value={customMinutes}
+                  onChangeText={(t) => {
+                    setUseCustom(true);
+                    setCustomMinutes(t.replace(/[^0-9]/g, '').slice(0, 4));
+                  }}
+                  placeholder="Minutes (1-1440)"
+                  placeholderTextColor={colors.textSecondary}
+                  keyboardType="numeric"
+                  style={[
+                    styles.input,
+                    {
+                      backgroundColor: colors.inputBackground,
+                      color: colors.text,
+                      borderColor: colors.glassBorder,
+                      flex: 1,
+                    },
+                  ]}
+                />
+              </View>
+
+              <Text
+                style={[styles.fieldLabel, { color: colors.textSecondary }]}
+              >
+                Workspace label (optional)
+              </Text>
               <TextInput
-                value={customMinutes}
-                onChangeText={(t) => {
-                  setUseCustom(true);
-                  setCustomMinutes(t.replace(/[^0-9]/g, '').slice(0, 4));
-                }}
-                placeholder="Minutes"
+                value={workspaceLabel}
+                onChangeText={(t) => setWorkspaceLabel(t.slice(0, 60))}
+                placeholder="e.g. Night shift • Warehouse B"
                 placeholderTextColor={colors.textSecondary}
-                keyboardType="numeric"
                 style={[
                   styles.input,
                   {
                     backgroundColor: colors.inputBackground,
                     color: colors.text,
-                    flex: 1,
+                    borderColor: colors.glassBorder,
                   },
                 ]}
               />
-            </View>
 
-            <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
-              WORKSPACE LABEL (OPTIONAL)
-            </Text>
-            <TextInput
-              value={workspaceLabel}
-              onChangeText={(t) => setWorkspaceLabel(t.slice(0, 60))}
-              placeholder="Label"
-              placeholderTextColor={colors.textSecondary}
-              style={[
-                styles.input,
-                { backgroundColor: colors.inputBackground, color: colors.text },
-              ]}
-            />
-
-            <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
-              HELP MESSAGE
-            </Text>
-            <TextInput
-              value={helpMessage}
-              onChangeText={(t) => setHelpMessage(t.slice(0, 280))}
-              placeholder="Help message"
-              placeholderTextColor={colors.textSecondary}
-              multiline
-              style={[
-                styles.input,
-                {
-                  backgroundColor: colors.inputBackground,
-                  color: colors.text,
-                  minHeight: 64,
-                  textAlignVertical: 'top',
-                },
-              ]}
-            />
-
-            <View style={styles.locationRow}>
-              <Ionicons
-                name={includeLocation ? 'location' : 'location-outline'}
-                size={18}
-                color={includeLocation ? colors.primary : colors.textSecondary}
-              />
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.locationTitle, { color: colors.text }]}>
-                  Include location
-                </Text>
-              </View>
-              <Switch
-                value={includeLocation}
-                onValueChange={setIncludeLocation}
-                trackColor={{ true: colors.primary, false: colors.border }}
-              />
-            </View>
-
-            <TouchableOpacity
-              style={[
-                styles.startButton,
-                {
-                  backgroundColor: canStart
-                    ? colors.primary
-                    : colors.inputBackground,
-                  opacity: isStarting ? 0.7 : 1,
-                },
-              ]}
-              onPress={handleStartTimer}
-              disabled={!canStart}
-              activeOpacity={0.85}
-            >
-              {isStarting ? (
-                <ActivityIndicator size="small" color="#FFFFFF" />
-              ) : (
-                <Ionicons
-                  name="timer"
-                  size={18}
-                  color={canStart ? '#FFFFFF' : colors.textSecondary}
-                />
-              )}
               <Text
+                style={[styles.fieldLabel, { color: colors.textSecondary }]}
+              >
+                Help message
+              </Text>
+              <TextInput
+                value={helpMessage}
+                onChangeText={(t) => setHelpMessage(t.slice(0, 280))}
+                placeholder="e.g. I am near the back gate, need help"
+                placeholderTextColor={colors.textSecondary}
+                multiline
                 style={[
-                  styles.startButtonText,
-                  { color: canStart ? '#FFFFFF' : colors.textSecondary },
+                  styles.input,
+                  {
+                    backgroundColor: colors.inputBackground,
+                    color: colors.text,
+                    borderColor: colors.glassBorder,
+                    minHeight: 64,
+                    textAlignVertical: 'top',
+                  },
+                ]}
+              />
+
+              <View
+                style={[
+                  styles.locationRow,
+                  {
+                    backgroundColor: colors.inputBackground,
+                    borderColor: colors.glassBorder,
+                  },
                 ]}
               >
-                {isStarting
-                  ? 'Arming…'
-                  : `Start ${effectiveMinutes > 0 ? `${effectiveMinutes}m ` : ''}timer`}
-              </Text>
-            </TouchableOpacity>
-          </View>
+                <MapPin
+                  size={18}
+                  color={
+                    includeLocation ? colors.primary : colors.textSecondary
+                  }
+                />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.locationTitle, { color: colors.text }]}>
+                    Include location
+                  </Text>
+                  <Text
+                    style={[styles.mutedSmall, { color: colors.textSecondary }]}
+                  >
+                    GPS + Map button on receivers
+                  </Text>
+                </View>
+                <Switch
+                  value={includeLocation}
+                  onValueChange={setIncludeLocation}
+                  trackColor={{ true: '#CF5C36', false: colors.border }}
+                />
+              </View>
+
+              <SpringButton
+                title={
+                  isStarting
+                    ? 'Arming...'
+                    : `Start ${effectiveMinutes > 0 ? `${effectiveMinutes}m ` : ''}timer`
+                }
+                variant="ink"
+                onPress={() => void handleStartTimer()}
+                disabled={!canStart}
+                loading={isStarting}
+                icon={
+                  <Clock
+                    size={18}
+                    color={canStart ? colors.background : colors.textSecondary}
+                  />
+                }
+                style={{ marginTop: 14 }}
+              />
+            </GlassCard>
+          </AnimatedListItem>
         )}
 
-        {/* Manual SOS */}
-        <TouchableOpacity
-          style={[
-            styles.sosButton,
-            { backgroundColor: colors.error, opacity: isFiring ? 0.7 : 1 },
-          ]}
+        <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>
+          Emergency
+        </Text>
+        <SpringButton
+          title={isFiring ? 'Sending...' : 'SEND SOS NOW'}
+          variant="danger"
           onPress={handleManualSos}
           disabled={isFiring}
-          activeOpacity={0.85}
-          accessibilityRole="button"
-          accessibilityLabel="Send SOS now to all nearby phones"
-          accessibilityState={{ disabled: isFiring, busy: isFiring }}
-        >
-          {isFiring ? (
-            <ActivityIndicator size="small" color="#FFFFFF" />
-          ) : (
-            <Ionicons name="alert-circle" size={22} color="#FFFFFF" />
-          )}
-          <Text style={styles.sosButtonText}>
-            {isFiring ? 'Sending…' : 'SEND SOS NOW'}
-          </Text>
-        </TouchableOpacity>
+          loading={isFiring}
+          icon={<Siren size={22} color="#FFF" />}
+        />
         <Text
           style={[
             styles.finePrint,
             { color: colors.textSecondary, textAlign: 'center' },
           ]}
         >
-          Sends now to all nearby phones.
+          Uses your help message + location above. Floods 3 tries.
         </Text>
 
-        {/* Siren & alerts — loops a loud siren on incoming SOS + on missed check-in */}
-        <View
-          style={[
-            styles.card,
-            {
-              backgroundColor: colors.surface,
-              borderColor: sirenPlaying ? colors.error : colors.border,
-            },
-          ]}
-        >
-          <View style={styles.locationRow}>
-            <Ionicons
-              name={sirenEnabled ? 'megaphone' : 'megaphone-outline'}
-              size={18}
-              color={
-                sirenPlaying
-                  ? colors.error
-                  : sirenEnabled
-                    ? colors.primary
-                    : colors.textSecondary
-              }
-            />
+        <GlassCard style={{ marginTop: 14 }}>
+          <View style={styles.sirenHeader}>
+            <View
+              style={[
+                styles.sirenIcon,
+                {
+                  backgroundColor: sirenPlaying
+                    ? colors.errorMuted
+                    : colors.inputBackground,
+                },
+              ]}
+            >
+              <Volume2
+                size={18}
+                color={
+                  sirenPlaying
+                    ? colors.error
+                    : sirenEnabled
+                      ? colors.primary
+                      : colors.textSecondary
+                }
+              />
+            </View>
             <View style={{ flex: 1 }}>
-              <Text style={[styles.locationTitle, { color: colors.text }]}>
-                SOS siren{sirenPlaying ? ' — SOUNDING' : ''}
-              </Text>
-              <Text style={[styles.muted, { color: colors.textSecondary }]}>
-                Sounds on incoming SOS.
+              <View style={styles.sirenTitleRow}>
+                <Text style={[styles.locationTitle, { color: colors.text }]}>
+                  SOS siren
+                </Text>
+                <View
+                  style={[
+                    styles.statusChip,
+                    {
+                      backgroundColor: sirenPlaying
+                        ? colors.error
+                        : sirenEnabled
+                          ? colors.successMuted
+                          : colors.inputBackground,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.statusChipText,
+                      {
+                        color: sirenPlaying
+                          ? '#FFF'
+                          : sirenEnabled
+                            ? colors.success
+                            : colors.textSecondary,
+                      },
+                    ]}
+                  >
+                    {sirenPlaying ? 'SOUNDING' : sirenEnabled ? 'ON' : 'OFF'}
+                  </Text>
+                </View>
+              </View>
+              <Text
+                style={[styles.mutedSmall, { color: colors.textSecondary }]}
+              >
+                Loops on incoming SOS. Stop here or from notification.
               </Text>
             </View>
             <Switch
               value={sirenEnabled}
               onValueChange={setSirenEnabled}
-              trackColor={{ true: colors.primary, false: colors.border }}
-              accessibilityLabel="SOS siren"
+              trackColor={{ true: '#CF5C36', false: colors.border }}
             />
           </View>
           <View style={styles.extendRow}>
@@ -596,134 +638,155 @@ export default function SosScreen() {
               </Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </GlassCard>
 
         {lastResult ? (
-          <Text style={[styles.resultLine, { color: colors.textSecondary }]}>
-            {lastResult}
-          </Text>
+          <GlassCard style={{ marginTop: 12 }}>
+            <Text style={[styles.resultText, { color: colors.textSecondary }]}>
+              {lastResult}
+            </Text>
+          </GlassCard>
         ) : null}
 
         {pendingRetry ? (
-          <View
-            style={[
-              styles.card,
-              { backgroundColor: colors.surface, borderColor: colors.warning },
-            ]}
-          >
-            <Text style={[styles.cardTitle, { color: colors.text }]}>
-              SOS not delivered
-            </Text>
+          <GlassCard style={{ marginTop: 12 }}>
+            <View style={styles.cardTitleRow}>
+              <TriangleAlert size={20} color={colors.warning} />
+              <Text style={[Typography.h3, { color: colors.text }]}>
+                SOS not delivered
+              </Text>
+            </View>
             <Text style={[styles.muted, { color: colors.textSecondary }]}>
               No nearby phones were reachable. Keep the app open and re-send
               when phones are near.
             </Text>
-            <TouchableOpacity
-              style={[styles.startButton, { backgroundColor: colors.warning }]}
+            <SpringButton
+              title="Re-send SOS"
               onPress={() => void retryPendingSos()}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="refresh" size={18} color="#FFFFFF" />
-              <Text style={[styles.startButtonText, { color: '#FFFFFF' }]}>
-                Re-send SOS
-              </Text>
-            </TouchableOpacity>
-          </View>
+              style={{ marginTop: 12 }}
+            />
+          </GlassCard>
         ) : null}
 
-        {/* Received SOS inbox */}
-        <View style={styles.sectionHeader}>
-          <Text style={[styles.overline, { color: colors.textSecondary }]}>
-            Received SOS · {inbox.length}
-          </Text>
-          {inbox.length > 0 ? (
-            <TouchableOpacity
-              onPress={clearInbox}
-              hitSlop={10}
-              activeOpacity={0.6}
-            >
-              <Text style={[styles.clearText, { color: colors.primary }]}>
-                Clear
-              </Text>
-            </TouchableOpacity>
-          ) : null}
+        <View style={styles.inboxHeader}>
+          <SectionHeader
+            overline="Received SOS"
+            count={inbox.length}
+            accent={colors.error}
+            actionLabel={inbox.length > 0 ? 'Clear' : undefined}
+            onAction={handleClearInbox}
+          />
         </View>
         {inbox.length === 0 ? (
-          <Text style={[styles.muted, { color: colors.textSecondary }]}>
-            SOS replies appear here in red.
-          </Text>
+          <GlassCard style={styles.emptyCard}>
+            <ShieldCheck size={28} color={colors.textSecondary} />
+            <Text style={[styles.emptyTitle, { color: colors.text }]}>
+              No SOS received
+            </Text>
+            <Text style={[styles.mutedSmall, { color: colors.textSecondary }]}>
+              SOS broadcasts land here with a Map button.
+            </Text>
+          </GlassCard>
         ) : (
-          <View
-            style={[
-              styles.listCard,
-              { backgroundColor: colors.surface, borderColor: colors.error },
-            ]}
-          >
-            {inbox.map((item, i) => {
-              const mapUrl = extractMapUrl(item.message);
-              return (
-                <View
-                  key={item.id}
-                  style={[
-                    styles.messageBlock,
-                    i < inbox.length - 1 && {
-                      borderBottomWidth: StyleSheet.hairlineWidth,
-                      borderBottomColor: colors.border,
-                    },
-                  ]}
-                >
-                  <Text
-                    style={[styles.messageMeta, { color: colors.error }]}
-                    numberOfLines={1}
-                  >
-                    🆘 {item.senderName} ·{' '}
-                    {item.isAuto ? 'auto (missed check-in)' : 'manual'} ·{' '}
-                    {item.hops <= 0
-                      ? 'direct'
-                      : item.hops === 1
-                        ? '1 hop'
-                        : `${item.hops} hops`}{' '}
-                    · {new Date(item.receivedAt).toLocaleTimeString()}
-                  </Text>
-                  <LinkifiedMessage
-                    message={item.message}
-                    textStyle={[styles.messageText, { color: colors.text }]}
-                    linkColor={colors.primary}
-                  />
-                  {mapUrl ? (
-                    <TouchableOpacity
-                      style={[
-                        styles.mapButton,
-                        { backgroundColor: colors.primaryMuted },
-                      ]}
-                      onPress={() =>
-                        Linking.openURL(mapUrl).catch(() =>
-                          Alert.alert('Cannot open link', mapUrl, [
-                            { text: 'OK' },
-                          ]),
-                        )
-                      }
-                      activeOpacity={0.8}
-                    >
-                      <Ionicons
-                        name="map-outline"
-                        size={16}
-                        color={colors.primary}
-                      />
+          inbox.map((item, i) => {
+            const mapUrl = resolveSosMapUrl(item.message, item.lat, item.lon);
+            const displayMessage = stripUrlsForDisplay(item.message);
+            return (
+              <AnimatedListItem key={item.id} index={i}>
+                <GlassCard style={styles.sosCard} padding={0}>
+                  <View style={styles.sosAccent} />
+                  <View style={styles.sosCardBody}>
+                    <View style={styles.sosCardTop}>
+                      <Text
+                        style={[styles.senderName, { color: colors.text }]}
+                        numberOfLines={1}
+                      >
+                        🆘 {item.senderName}
+                      </Text>
                       <Text
                         style={[
-                          styles.mapButtonText,
-                          { color: colors.primary },
+                          styles.timeText,
+                          { color: colors.textSecondary },
                         ]}
                       >
-                        Open location in Maps
+                        {new Date(item.receivedAt).toLocaleTimeString()}
                       </Text>
-                    </TouchableOpacity>
-                  ) : null}
-                </View>
-              );
-            })}
-          </View>
+                    </View>
+                    <View style={styles.chipRow}>
+                      <View
+                        style={[
+                          styles.chip,
+                          {
+                            backgroundColor: item.isAuto
+                              ? colors.warningMuted
+                              : colors.errorMuted,
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.chipText,
+                            {
+                              color: item.isAuto
+                                ? colors.warning
+                                : colors.error,
+                            },
+                          ]}
+                        >
+                          {item.isAuto ? 'AUTO • missed check-in' : 'MANUAL'}
+                        </Text>
+                      </View>
+                      <View
+                        style={[
+                          styles.chip,
+                          { backgroundColor: colors.inputBackground },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.chipText,
+                            { color: colors.textSecondary },
+                          ]}
+                        >
+                          {hopLabel(item.hops)}
+                        </Text>
+                      </View>
+                    </View>
+                    <Text style={[styles.messageText, { color: colors.text }]}>
+                      {displayMessage}
+                    </Text>
+                    {mapUrl ? (
+                      <TouchableOpacity
+                        style={[
+                          styles.mapButton,
+                          { backgroundColor: colors.primaryMuted },
+                        ]}
+                        onPress={() =>
+                          Linking.openURL(mapUrl).catch(
+                            () =>
+                              void showAppAlert('Cannot open link', mapUrl, [
+                                { text: 'OK' },
+                              ]),
+                          )
+                        }
+                        activeOpacity={0.8}
+                      >
+                        <Map size={16} color={colors.primary} />
+                        <Text
+                          style={[
+                            styles.mapButtonText,
+                            { color: colors.primary },
+                          ]}
+                        >
+                          Open location in Maps
+                        </Text>
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+                </GlassCard>
+              </AnimatedListItem>
+            );
+          })
         )}
       </ScrollView>
     </SafeAreaView>
@@ -731,53 +794,44 @@ export default function SosScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, paddingHorizontal: Spacing.md },
-  scrollContent: { paddingTop: Spacing.md, paddingBottom: Spacing.xl },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    justifyContent: 'space-between',
-    marginBottom: Spacing.sm,
+  container: { flex: 1 },
+  scrollContent: {
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.md,
+    paddingBottom: 130,
+    gap: 4,
   },
-  overline: {
+  progressTrack: {
+    height: 8,
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginBottom: 12,
+  },
+  progressFill: { height: 8, borderRadius: 4 },
+  sectionLabel: {
+    marginTop: Spacing.lg,
+    marginBottom: 8,
     fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 1.4,
-    textTransform: 'uppercase',
+    fontWeight: '800',
+    letterSpacing: 1.2,
   },
-  title: { marginTop: 2, fontSize: 27, fontWeight: '800', letterSpacing: -0.5 },
-  livePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: Radius.round,
-    borderWidth: 1,
-  },
-  liveDot: { width: 7, height: 7, borderRadius: 4 },
-  liveText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.8 },
-  card: {
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    padding: Spacing.md,
-    marginTop: Spacing.sm,
-  },
-  cardTitle: { fontSize: 16, fontWeight: '800' },
+  cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   muted: { marginTop: 4, fontSize: 13, lineHeight: 19 },
+  mutedSmall: { marginTop: 2, fontSize: 12, lineHeight: 17 },
   fieldLabel: {
     marginTop: Spacing.md,
     marginBottom: 6,
     fontSize: 11,
     fontWeight: '700',
     letterSpacing: 1.1,
+    textTransform: 'uppercase',
   },
   presetRow: { flexDirection: 'row', gap: 8 },
   preset: {
     flex: 1,
     alignItems: 'center',
     paddingVertical: 10,
-    borderRadius: Radius.md,
+    borderRadius: Radius.round,
     borderWidth: 1,
   },
   presetText: { fontSize: 14, fontWeight: '700' },
@@ -786,44 +840,22 @@ const styles = StyleSheet.create({
     marginTop: 2,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    borderRadius: Radius.md,
+    borderRadius: Radius.sm,
+    borderWidth: 1,
     fontSize: 15,
   },
-  helpPreview: { marginTop: 8, fontSize: 14, fontStyle: 'italic' },
-  timerTop: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  timerCountdown: {
-    fontSize: 38,
-    fontWeight: '800',
-    fontVariant: ['tabular-nums'],
+  quoteBox: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: Radius.sm,
   },
-  progressTrack: {
-    marginTop: 10,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#00000014',
-    overflow: 'hidden',
-  },
-  progressFill: { height: 8, borderRadius: 4 },
-  safeButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    marginTop: Spacing.md,
-    height: 52,
-    borderRadius: Radius.round,
-  },
-  safeButtonText: {
-    color: '#FFFFFF',
-    fontSize: FontSize.medium,
-    fontWeight: '800',
-  },
+  helpPreview: { fontSize: 14, fontStyle: 'italic', lineHeight: 20 },
   extendRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
   extendButton: {
     flex: 1,
     alignItems: 'center',
     paddingVertical: 10,
-    borderRadius: Radius.md,
+    borderRadius: Radius.sm,
   },
   extendText: { fontSize: 14, fontWeight: '700' },
   locationRow: {
@@ -831,55 +863,49 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     marginTop: Spacing.md,
+    padding: 12,
+    borderRadius: Radius.sm,
+    borderWidth: 1,
   },
   locationTitle: { fontSize: 15, fontWeight: '700' },
-  startButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    marginTop: Spacing.md,
-    height: 50,
-    borderRadius: Radius.round,
-  },
-  startButtonText: { fontSize: FontSize.medium, fontWeight: '700' },
-  sosButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    marginTop: Spacing.lg,
-    height: 60,
-    borderRadius: Radius.round,
-  },
-  sosButtonText: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-  },
   finePrint: { marginTop: 8, fontSize: 12, lineHeight: 17 },
-  resultLine: {
-    marginTop: Spacing.sm,
-    fontSize: 13,
-    textAlign: 'center',
-    lineHeight: 19,
+  resultText: { fontSize: 13, lineHeight: 19 },
+  sirenHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  sirenIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  sectionHeader: {
+  sirenTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  statusChip: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: Radius.round,
+  },
+  statusChipText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.6 },
+  inboxHeader: { marginTop: Spacing.lg },
+  emptyCard: { alignItems: 'center', gap: 6, paddingVertical: 28 },
+  emptyTitle: { marginTop: 6, fontSize: 15, fontWeight: '800' },
+  sosCard: { flexDirection: 'row', marginTop: 8, overflow: 'hidden' },
+  sosAccent: { width: 4, backgroundColor: '#EF4444' },
+  sosCardBody: { flex: 1, padding: Spacing.md, gap: 6 },
+  sosCardTop: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: Spacing.lg,
-    marginBottom: Spacing.sm,
+    gap: 8,
   },
-  clearText: { fontSize: 13, fontWeight: '700' },
-  listCard: {
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    paddingHorizontal: Spacing.md,
+  senderName: { flex: 1, fontSize: 15, fontWeight: '800' },
+  timeText: { fontSize: 12, fontWeight: '600' },
+  chipRow: { flexDirection: 'row', gap: 6, flexWrap: 'wrap' },
+  chip: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: Radius.round,
   },
-  messageBlock: { paddingVertical: 11, gap: 4 },
-  messageMeta: { fontSize: 11, fontWeight: '700' },
+  chipText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.4 },
   messageText: { fontSize: 15, lineHeight: 21 },
   mapButton: {
     flexDirection: 'row',
@@ -888,7 +914,7 @@ const styles = StyleSheet.create({
     gap: 6,
     marginTop: 6,
     paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingVertical: 9,
     borderRadius: Radius.round,
   },
   mapButtonText: { fontSize: 13, fontWeight: '800' },

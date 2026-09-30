@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  KeyboardAvoidingView,
   Linking,
+  Platform,
   ScrollView,
   Text,
   TextInput,
@@ -9,16 +11,39 @@ import {
   View,
 } from 'react-native';
 import * as Device from 'expo-device';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
+import {
+  Bluetooth as BluetoothIcon,
+  Globe,
+  Languages,
+  Mic,
+  Search,
+  Send,
+  Square,
+  Trash2,
+  Volume2,
+  VolumeX,
+  X,
+} from 'lucide-react-native';
+import { router } from 'expo-router';
 
 import { useVoiceMessage } from '../../features/audio/useVoiceMessage';
 import { useAutoSpeak } from '../../features/tts/useAutoSpeak';
 import { useTheme } from '../../context/ThemeContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { isLanguageInstalled } from '../../features/models/languages';
-import { router } from 'expo-router';
-import { Spacing } from '../../constants/theme';
+import GlassCard from '@/components/ui/GlassCard';
+import TiltDeck from '@/components/ui/TiltDeck';
+import CircleButton from '@/components/ui/CircleButton';
+import ScreenHeader from '@/components/ui/ScreenHeader';
+import AnimatedListItem from '@/components/ui/AnimatedListItem';
+import SectionHeader from '@/components/ui/SectionHeader';
+import { showAppAlert } from '@/components/ui/AppModal';
+import { useKeyboardHeight } from '@/components/ui/useKeyboardHeight';
+import { Radius, Shadows, Spacing, Typography } from '../../constants/theme';
 import { styles } from './bluetooth.styles';
 
 import {
@@ -32,19 +57,24 @@ import {
 } from '../../features/bluetooth';
 
 /**
- * Bluetooth chat screen — UI composition only.
- *
- * All BLE logic lives in `features/bluetooth/`:
- * - `constants` / `codec` / `devices` / `transport` — pure protocol helpers
- * - `permissions` — BT + Location runtime requests (new-Android scan fix)
- * - `useBleAdvertiser` — peripheral setup + advertising
- * - `useBleScanner` — discovery (requests permissions before scanning)
- * - `useBleConnection` — GATT connect/disconnect + framed sends
- * - `useBleMessages` — message list + packet reassembly + streaming TTS feed
- * - `useBleModels` — heavy STT/TTS load on connect, release on disconnect
+ * Bluetooth chat screen - UI composition only (premium redesign).
+ * All BLE logic lives in `features/bluetooth/`.
  */
 export default function BluetoothScreen() {
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
+  // Clearance above the floating tab bar + Android system buttons.
+  const chatBottomPad = 70 + Math.max(insets.bottom, 12) + 16;
+  // Edge-to-edge Android won't resize for the keyboard — lift manually.
+  const kbHeight = useKeyboardHeight();
+  const scrollRef = useRef<ScrollView>(null);
+  useEffect(() => {
+    if (kbHeight <= 0) return;
+    const t = setTimeout(() => {
+      scrollRef.current?.scrollToEnd({ animated: true });
+    }, 60);
+    return () => clearTimeout(t);
+  }, [kbHeight]);
   const { selectedLanguage } = useLanguage();
   const [message, setMessage] = useState('');
 
@@ -62,16 +92,13 @@ export default function BluetoothScreen() {
     releaseStt,
   } = useVoiceMessage();
 
-  // Auto-speak incoming messages via streaming Hindi TTS.
-  // autoInit:false — the ~114MB VITS model loads only after the two devices
-  // connect (see useBleModels), so idle RAM stays low.
   const {
     enabled: ttsEnabled,
     setEnabled: setTtsEnabled,
+    isSpeaking: ttsSpeaking,
     isReady: ttsReady,
     isLoading: ttsLoading,
     error: ttsError,
-    isSpeaking: ttsSpeaking,
     stop: stopTts,
     speakFullMessage,
     beginStream: ttsBeginStream,
@@ -82,8 +109,6 @@ export default function BluetoothScreen() {
     release: releaseTts,
   } = useAutoSpeak(true, { autoInit: false });
 
-  // Latest TTS callbacks for use inside BLE event listeners (which are
-  // registered once per connection and would otherwise capture stale closures).
   const ttsRef = useRef({
     speakFullMessage,
     beginStream: ttsBeginStream,
@@ -134,7 +159,6 @@ export default function BluetoothScreen() {
   );
 
   const {
-    connectedDeviceId,
     isConnecting,
     isChatConnected,
     connectToDevice,
@@ -150,10 +174,6 @@ export default function BluetoothScreen() {
     isLanguageInstalled: languageInstalled,
     promptInstallLanguage: handlePromptInstall,
   });
-
-  // NOTE: homepage mesh broadcast is owned solely by the always-on mesh
-  // runtime (flood to ALL nearby app phones, no manual connect). This screen
-  // keeps the manual 1-to-1 chat only, so it must NOT override that sender.
 
   const {
     devices,
@@ -194,7 +214,19 @@ export default function BluetoothScreen() {
     if (ok) setMessage('');
   }, [message, sendTextOverBLE]);
 
-  /** Toggle voice recording on/off. On stop → transcribe → send. */
+  const handleClearChat = useCallback(() => {
+    if (messages.length === 0) return;
+    void showAppAlert(
+      'Clear messages?',
+      'This removes all messages in this chat.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Clear', style: 'destructive', onPress: clearMessages },
+      ],
+    );
+  }, [messages.length, clearMessages]);
+
+  /** Toggle voice recording on/off. On stop -> transcribe -> send. */
   const handleVoiceToggle = useCallback(async () => {
     if (!isVoiceRecording && !isLanguageInstalled(selectedLanguage)) {
       promptInstallLanguage(selectedLanguage);
@@ -202,14 +234,11 @@ export default function BluetoothScreen() {
     }
     try {
       if (isVoiceRecording) {
-        // Stop recording → transcribe → send
         const text = await stopVoice();
         if (text) {
           await sendTextOverBLE(text);
         }
       } else {
-        // Halt speaker playback first: avoids the mic picking up TTS output
-        // and avoids AudioTrack/AudioRecord contention on low-end devices.
         try {
           stopTts();
         } catch {}
@@ -230,39 +259,52 @@ export default function BluetoothScreen() {
   return (
     <SafeAreaView
       style={[styles.safeArea, { backgroundColor: colors.background }]}
-      edges={['top', 'bottom']}
+      edges={['top']}
     >
-      <View
-        style={[
-          styles.header,
-          { backgroundColor: colors.surface, borderBottomColor: colors.border },
-        ]}
-      >
-        <View>
-          <Text style={[styles.headerLabel, { color: colors.textSecondary }]}>
-            VaaniSetu
-          </Text>
-        </View>
-
-        <View
-          style={[
-            styles.statusBadge,
-            {
-              backgroundColor: bluetoothReady
-                ? '#DCFCE7'
-                : colors.inputBackground,
-            },
-          ]}
-        >
-          <Text
-            style={[
-              styles.statusText,
-              { color: bluetoothReady ? colors.success : colors.textSecondary },
-            ]}
-          >
-            {bluetoothReady ? 'Ready' : 'Not started'}
-          </Text>
-        </View>
+      <View style={[premium.headerPad]}>
+        <ScreenHeader
+          title="Bluetooth"
+          subtitle={
+            isChatConnected
+              ? `Private chat • ${selectedLanguage.label}`
+              : bluetoothReady
+                ? advertisedName
+                  ? `Visible as "${advertisedName}"`
+                  : 'Ready to connect'
+                : 'Start Bluetooth so nearby phones find you.'
+          }
+          left={
+            isChatConnected ? (
+              <CircleButton
+                onPress={disconnectFromDevice}
+                accessibilityLabel="Disconnect chat"
+              >
+                <X size={20} color={colors.text} />
+              </CircleButton>
+            ) : (
+              <CircleButton
+                onPress={isScanning ? stopScanning : scanForDevices}
+                accessibilityLabel={
+                  isScanning ? 'Stop scanning' : 'Scan for devices'
+                }
+              >
+                {isScanning ? (
+                  <Square size={18} color={colors.text} fill={colors.text} />
+                ) : (
+                  <Search size={20} color={colors.text} />
+                )}
+              </CircleButton>
+            )
+          }
+          right={
+            <CircleButton
+              onPress={() => router.push('/settings/language')}
+              accessibilityLabel="Voice language"
+            >
+              <Globe size={20} color={colors.text} />
+            </CircleButton>
+          }
+        />
       </View>
 
       {!isChatConnected ? (
@@ -270,350 +312,293 @@ export default function BluetoothScreen() {
           style={styles.flex}
           contentContainerStyle={[
             styles.scrollContent,
-            { paddingBottom: Spacing.xl },
+            { paddingBottom: 130, paddingHorizontal: Spacing.lg },
           ]}
           keyboardShouldPersistTaps="handled"
         >
-          <View style={styles.section}>
-            <Text
-              style={[
-                styles.sectionDescription,
-                { color: colors.textSecondary },
-              ]}
-            >
-              Start Bluetooth so nearby phones can find you.
-            </Text>
-            <Text style={[styles.nameLabel, { color: colors.textSecondary }]}>
-              DEVICE NAME
-            </Text>
-            <TextInput
-              value={displayName}
-              onChangeText={(t) => setDisplayName(t.slice(0, 20))}
-              placeholder={Device.modelName ?? 'Name'}
-              placeholderTextColor={colors.textSecondary}
-              maxLength={20}
-              style={[
-                styles.nameInput,
-                { backgroundColor: colors.inputBackground, color: colors.text },
-              ]}
-            />
-            {bluetoothReady && advertisedName ? (
-              <Text style={[styles.advertisedAs, { color: colors.success }]}>
-                You are visible as “{advertisedName}”
+          <AnimatedListItem index={0}>
+            <TiltDeck>
+              <Text
+                style={[Typography.overline, { color: colors.textSecondary }]}
+              >
+                Device name
               </Text>
-            ) : null}
-            {btError ? (
-              <View style={styles.btErrorBox}>
-                <Text style={[styles.btErrorText, { color: colors.error }]}>
-                  {btError}
-                </Text>
-                <TouchableOpacity
-                  onPress={() => Linking.openSettings()}
-                  activeOpacity={0.8}
-                >
-                  <Text style={[styles.btErrorLink, { color: colors.primary }]}>
-                    Open system settings
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            ) : null}
-            <TouchableOpacity
-              style={[
-                styles.primaryButton,
-                {
-                  backgroundColor: isStartingBt
-                    ? colors.textSecondary
-                    : colors.primary,
-                  opacity: isStartingBt ? 0.7 : 1,
-                },
-              ]}
-              onPress={handleStartPress}
-              disabled={isStartingBt}
-              activeOpacity={0.82}
-            >
-              {isStartingBt ? (
-                <ActivityIndicator
-                  color="#FFFFFF"
-                  size="small"
-                  style={styles.buttonIcon}
-                />
-              ) : (
-                <Ionicons
-                  name="bluetooth"
-                  size={18}
-                  color="#FFFFFF"
-                  style={styles.buttonIcon}
-                />
-              )}
-              <Text style={styles.primaryButtonText}>
-                {isStartingBt
-                  ? 'Starting…'
-                  : bluetoothReady
-                    ? `Update name & restart (“${advertisedName}”)`
-                    : 'Start Bluetooth'}
-              </Text>
-            </TouchableOpacity>
-            {bluetoothReady ? (
-              <TouchableOpacity
+              <TextInput
+                value={displayName}
+                onChangeText={(t) => setDisplayName(t.slice(0, 20))}
+                placeholder={Device.modelName ?? 'Name'}
+                placeholderTextColor={colors.textSecondary}
+                maxLength={20}
                 style={[
-                  styles.stopButton,
-                  { backgroundColor: colors.inputBackground },
-                ]}
-                onPress={stopBluetooth}
-                activeOpacity={0.82}
-              >
-                <Text style={[styles.stopButtonText, { color: colors.text }]}>
-                  Stop advertising
-                </Text>
-              </TouchableOpacity>
-            ) : null}
-          </View>
-
-          <View style={styles.section}>
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>
-              Language
-            </Text>
-            <Text
-              style={[
-                styles.sectionDescription,
-                { color: colors.textSecondary },
-              ]}
-            >
-              Voice uses this language.
-            </Text>
-            <View
-              style={[
-                styles.deviceCard,
-                { backgroundColor: colors.surface, borderColor: colors.border },
-              ]}
-            >
-              <View style={styles.deviceInfo}>
-                <Text style={[styles.deviceName, { color: colors.text }]}>
-                  {selectedLanguage.label}
-                </Text>
-                <Text
-                  style={[styles.deviceId, { color: colors.textSecondary }]}
-                >
-                  {isLanguageInstalled(selectedLanguage)
-                    ? 'Installed • works offline'
-                    : 'Not installed'}
-                </Text>
-              </View>
-              <TouchableOpacity
-                style={[
-                  styles.connectButton,
-                  { backgroundColor: colors.primary },
-                ]}
-                onPress={() => router.push('/settings/language')}
-                activeOpacity={0.82}
-              >
-                <Text style={styles.connectButtonText}>Change</Text>
-              </TouchableOpacity>
-            </View>
-            {!isLanguageInstalled(selectedLanguage) ? (
-              <TouchableOpacity
-                style={[
-                  styles.stopButton,
-                  { backgroundColor: colors.inputBackground, marginTop: 8 },
-                ]}
-                onPress={handlePromptInstall}
-                activeOpacity={0.82}
-              >
-                <Text style={[styles.stopButtonText, { color: colors.text }]}>
-                  Install “{selectedLanguage.label}” models
-                </Text>
-              </TouchableOpacity>
-            ) : null}
-          </View>
-
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <View>
-                <Text style={[styles.sectionTitle, { color: colors.text }]}>
-                  Nearby VaaniSetu Devices
-                </Text>
-                <Text
-                  style={[styles.deviceCount, { color: colors.textSecondary }]}
-                >
-                  {devices.length} found{isScanning ? ' • scanning…' : ''}
-                </Text>
-              </View>
-
-              <TouchableOpacity
-                style={[
-                  styles.scanButton,
+                  premium.nameInput,
                   {
-                    backgroundColor: isScanning ? colors.error : colors.primary,
+                    backgroundColor: colors.inputBackground,
+                    color: colors.text,
+                    borderColor: colors.glassBorder,
                   },
                 ]}
-                onPress={isScanning ? stopScanning : scanForDevices}
-                activeOpacity={0.82}
+              />
+              {btError ? (
+                <View style={{ marginBottom: 8 }}>
+                  <Text style={[premium.errorText, { color: colors.error }]}>
+                    {btError}
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => Linking.openSettings()}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[premium.linkText, { color: colors.primary }]}>
+                      Open system settings
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+              <TouchableOpacity
+                style={[
+                  premium.primaryBtn,
+                  {
+                    backgroundColor: isStartingBt
+                      ? colors.inputBackground
+                      : colors.text,
+                    opacity: isStartingBt ? 0.7 : 1,
+                  },
+                  Shadows.card,
+                ]}
+                onPress={handleStartPress}
+                disabled={isStartingBt}
+                activeOpacity={0.85}
               >
-                <Text style={styles.scanButtonText}>
-                  {isScanning ? 'Stop' : 'Scan'}
+                {isStartingBt ? (
+                  <ActivityIndicator
+                    color={colors.textSecondary}
+                    size="small"
+                  />
+                ) : (
+                  <BluetoothIcon
+                    size={18}
+                    color={
+                      bluetoothReady || !isStartingBt
+                        ? colors.background
+                        : colors.textSecondary
+                    }
+                  />
+                )}
+                <Text
+                  style={[
+                    premium.primaryBtnText,
+                    {
+                      color: isStartingBt
+                        ? colors.textSecondary
+                        : colors.background,
+                    },
+                  ]}
+                >
+                  {isStartingBt
+                    ? 'Starting...'
+                    : bluetoothReady
+                      ? `Update & restart ("${advertisedName}")`
+                      : 'Start Bluetooth'}
                 </Text>
               </TouchableOpacity>
-            </View>
+              {bluetoothReady ? (
+                <TouchableOpacity
+                  style={[
+                    premium.ghostBtn,
+                    { backgroundColor: colors.inputBackground },
+                  ]}
+                  onPress={stopBluetooth}
+                  activeOpacity={0.85}
+                >
+                  <Text style={[premium.ghostText, { color: colors.text }]}>
+                    Stop advertising
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+            </TiltDeck>
+          </AnimatedListItem>
 
+          <View style={{ marginTop: Spacing.lg }}>
+            <SectionHeader overline="Language" />
+            <AnimatedListItem index={1}>
+              <GlassCard>
+                <View style={premium.rowBetween}>
+                  <View style={{ flex: 1 }}>
+                    <View style={premium.rowGap}>
+                      <Languages size={16} color={colors.primary} />
+                      <Text style={[Typography.h3, { color: colors.text }]}>
+                        {selectedLanguage.label}
+                      </Text>
+                    </View>
+                    <Text
+                      style={[
+                        Typography.caption,
+                        { color: colors.textSecondary, marginTop: 4 },
+                      ]}
+                    >
+                      {isLanguageInstalled(selectedLanguage)
+                        ? 'Installed • works offline'
+                        : 'Not installed'}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={[premium.miniBtn, { backgroundColor: colors.text }]}
+                    onPress={() => router.push('/settings/language')}
+                    activeOpacity={0.85}
+                  >
+                    <Text
+                      style={[
+                        premium.miniBtnText,
+                        { color: colors.background },
+                      ]}
+                    >
+                      Change
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+                {!isLanguageInstalled(selectedLanguage) ? (
+                  <TouchableOpacity
+                    style={[
+                      premium.ghostBtn,
+                      { backgroundColor: colors.inputBackground },
+                    ]}
+                    onPress={handlePromptInstall}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={[premium.ghostText, { color: colors.text }]}>
+                      Install &quot;{selectedLanguage.label}&quot; models
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+              </GlassCard>
+            </AnimatedListItem>
+          </View>
+
+          <View style={{ marginTop: Spacing.lg }}>
+            <SectionHeader
+              overline={`Nearby VaaniSetu • ${devices.length}${isScanning ? ' • scanning...' : ''}`}
+              actionLabel={isScanning ? 'Stop' : 'Scan'}
+              onAction={isScanning ? stopScanning : scanForDevices}
+            />
             {scanError ? (
-              <View style={styles.btErrorBox}>
-                <Text style={[styles.btErrorText, { color: colors.error }]}>
+              <GlassCard style={{ marginBottom: 10 }}>
+                <Text style={[premium.errorText, { color: colors.error }]}>
                   {scanError}
                 </Text>
                 <TouchableOpacity
                   onPress={() => Linking.openSettings()}
                   activeOpacity={0.8}
                 >
-                  <Text style={[styles.btErrorLink, { color: colors.primary }]}>
+                  <Text style={[premium.linkText, { color: colors.primary }]}>
                     Open system settings
                   </Text>
                 </TouchableOpacity>
-              </View>
+              </GlassCard>
             ) : null}
 
             {devices.length === 0 ? (
-              <View
-                style={[
-                  styles.emptyState,
-                  {
-                    backgroundColor: colors.surface,
-                    borderColor: colors.border,
-                  },
-                ]}
-              >
-                <Ionicons
-                  name="search-outline"
-                  size={32}
-                  color={colors.textSecondary}
-                  style={{ marginBottom: Spacing.sm }}
-                />
-                <Text style={[styles.emptyStateTitle, { color: colors.text }]}>
+              <GlassCard style={premium.empty}>
+                <Search size={30} color={colors.textSecondary} />
+                <Text
+                  style={[Typography.h3, { color: colors.text, marginTop: 8 }]}
+                >
                   No devices
                 </Text>
                 <Text
                   style={[
-                    styles.emptyStateText,
-                    { color: colors.textSecondary },
+                    Typography.caption,
+                    {
+                      color: colors.textSecondary,
+                      textAlign: 'center',
+                      marginTop: 4,
+                    },
                   ]}
                 >
                   Open app on both phones, then Scan.
                 </Text>
-              </View>
+              </GlassCard>
             ) : (
-              <View style={styles.deviceList}>
-                {devices.map((device) => (
-                  <View
-                    key={device.id}
-                    style={[
-                      styles.deviceCard,
-                      {
-                        backgroundColor: colors.surface,
-                        borderColor: colors.border,
-                      },
-                    ]}
-                  >
-                    <View style={styles.deviceInfo}>
-                      <Text
-                        style={[styles.deviceName, { color: colors.text }]}
-                        numberOfLines={1}
-                      >
-                        {getDeviceDisplayName(device)}
-                      </Text>
-                      <Text
-                        style={[
-                          styles.deviceId,
-                          { color: colors.textSecondary },
-                        ]}
-                      >
-                        {device.id}
-                      </Text>
-                      {device.rssi !== undefined && (
-                        <Text
+              <View style={{ gap: 10 }}>
+                {devices.map((device, i) => (
+                  <AnimatedListItem key={device.id} index={i}>
+                    <GlassCard>
+                      <View style={premium.rowBetween}>
+                        <View style={{ flex: 1, marginRight: 10 }}>
+                          <Text
+                            style={[Typography.h3, { color: colors.text }]}
+                            numberOfLines={1}
+                          >
+                            {getDeviceDisplayName(device)}
+                          </Text>
+                          <Text
+                            style={[
+                              premium.mono,
+                              { color: colors.textSecondary },
+                            ]}
+                          >
+                            {device.id}
+                          </Text>
+                          {device.rssi !== undefined && (
+                            <Text
+                              style={[
+                                Typography.caption,
+                                { color: colors.textSecondary, marginTop: 2 },
+                              ]}
+                            >
+                              Signal: {device.rssi} dBm
+                            </Text>
+                          )}
+                        </View>
+                        <TouchableOpacity
                           style={[
-                            styles.deviceRssi,
-                            { color: colors.textSecondary },
+                            premium.miniBtn,
+                            { backgroundColor: colors.text },
                           ]}
+                          disabled={isConnecting}
+                          onPress={() => handleConnectPress(device.id)}
+                          activeOpacity={0.85}
                         >
-                          Signal: {device.rssi} dBm
-                        </Text>
-                      )}
-                    </View>
-
-                    <TouchableOpacity
-                      style={[
-                        styles.connectButton,
-                        { backgroundColor: colors.primary },
-                      ]}
-                      disabled={isConnecting}
-                      onPress={() => handleConnectPress(device.id)}
-                      activeOpacity={0.82}
-                    >
-                      {isConnecting ? (
-                        <ActivityIndicator color="#FFFFFF" size="small" />
-                      ) : (
-                        <Text style={styles.connectButtonText}>Connect</Text>
-                      )}
-                    </TouchableOpacity>
-                  </View>
+                          {isConnecting ? (
+                            <ActivityIndicator
+                              color={colors.background}
+                              size="small"
+                            />
+                          ) : (
+                            <Text
+                              style={[
+                                premium.miniBtnText,
+                                { color: colors.background },
+                              ]}
+                            >
+                              Connect
+                            </Text>
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                    </GlassCard>
+                  </AnimatedListItem>
                 ))}
               </View>
             )}
           </View>
         </ScrollView>
       ) : (
-        <View style={styles.flex}>
-          <View
-            style={[
-              styles.connectionBar,
-              {
-                backgroundColor: colors.surface,
-                borderBottomColor: colors.border,
-              },
-            ]}
-          >
-            <View style={styles.connectionInfo}>
-              <View
-                style={[
-                  styles.connectedDot,
-                  { backgroundColor: colors.success },
-                ]}
-              />
-              <View>
-                <Text style={[styles.connectedTitle, { color: colors.text }]}>
-                  Connected
-                </Text>
-                <Text
-                  style={[
-                    styles.connectedRole,
-                    { color: colors.textSecondary },
-                  ]}
-                >
-                  {connectedDeviceId
-                    ? 'Central (scanner)'
-                    : 'Peripheral (advertiser)'}{' '}
-                  • {selectedLanguage.label}
-                </Text>
-              </View>
-            </View>
-
-            <TouchableOpacity
-              style={[
-                styles.disconnectButton,
-                { backgroundColor: colors.inputBackground },
-              ]}
-              onPress={disconnectFromDevice}
-              activeOpacity={0.8}
-            >
-              <Text style={[styles.disconnectText, { color: colors.text }]}>
-                Disconnect
-              </Text>
-            </TouchableOpacity>
-          </View>
-
+        <KeyboardAvoidingView
+          style={styles.flex}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
           <ScrollView
+            ref={scrollRef}
             style={styles.flex}
-            contentContainerStyle={styles.messagesContent}
+            contentContainerStyle={[
+              styles.messagesContent,
+              { paddingHorizontal: Spacing.lg },
+            ]}
             keyboardShouldPersistTaps="handled"
+            onContentSizeChange={() => {
+              if (kbHeight > 0) {
+                scrollRef.current?.scrollToEnd({ animated: true });
+              }
+            }}
           >
             {messages.length === 0 ? (
               <Text
@@ -622,7 +607,7 @@ export default function BluetoothScreen() {
                   { color: colors.textSecondary, textAlign: 'center' },
                 ]}
               >
-                Say where you are — messages appear here.
+                Say where you are - messages appear here.
               </Text>
             ) : (
               messages.map((chatMessage) => (
@@ -641,13 +626,13 @@ export default function BluetoothScreen() {
                       chatMessage.sender === 'me'
                         ? [
                             styles.messageBubbleMe,
-                            { backgroundColor: colors.primary },
+                            { backgroundColor: colors.text },
                           ]
                         : [
                             styles.messageBubbleOther,
                             {
-                              backgroundColor: colors.surface,
-                              borderColor: colors.border,
+                              backgroundColor: colors.card,
+                              borderColor: colors.glassBorder,
                             },
                           ],
                     ]}
@@ -656,7 +641,7 @@ export default function BluetoothScreen() {
                       style={[
                         styles.messageText,
                         chatMessage.sender === 'me'
-                          ? styles.messageTextMe
+                          ? [styles.messageTextMe, { color: colors.background }]
                           : [styles.messageTextOther, { color: colors.text }],
                       ]}
                     >
@@ -668,248 +653,289 @@ export default function BluetoothScreen() {
             )}
           </ScrollView>
 
-          {/* Auto-speak (streaming TTS) control for incoming messages */}
-          <View
-            style={[
-              styles.ttsBar,
-              {
-                backgroundColor: colors.surface,
-                borderTopColor: colors.border,
-              },
-            ]}
-          >
-            <TouchableOpacity
+          {(isVoiceRecording || isTranscribing) && (
+            <Text
+              style={[premium.hintLine, { color: colors.textSecondary }]}
+              numberOfLines={2}
+            >
+              {isVoiceRecording
+                ? `Recording...${partialText ? ` "${partialText}"` : ' tap mic to stop'}`
+                : 'Transcribing speech...'}
+            </Text>
+          )}
+          {(voiceError || sttError || ttsError) &&
+            !isVoiceRecording &&
+            !isTranscribing && (
+              <Text
+                style={[premium.hintLine, { color: colors.error }]}
+                numberOfLines={2}
+              >
+                {voiceError ??
+                  (sttError
+                    ? `Speech model: ${sttError}`
+                    : `Voice model: ${ttsError}`)}
+              </Text>
+            )}
+
+          <View style={{ paddingHorizontal: Spacing.lg }}>
+            <View
               style={[
-                styles.ttsToggle,
+                premium.utilRow,
                 {
-                  backgroundColor: ttsEnabled
-                    ? colors.primary
-                    : colors.inputBackground,
+                  backgroundColor: colors.card,
+                  borderColor: colors.glassBorder,
                 },
               ]}
-              onPress={() => setTtsEnabled(!ttsEnabled)}
-              activeOpacity={0.82}
             >
-              <Ionicons
-                name={ttsEnabled ? 'volume-high' : 'volume-mute'}
-                size={16}
-                color={ttsEnabled ? '#FFFFFF' : colors.textSecondary}
-              />
-              <Text
-                style={[
-                  styles.ttsToggleText,
-                  { color: ttsEnabled ? '#FFFFFF' : colors.textSecondary },
-                ]}
-              >
-                {ttsEnabled ? 'Auto-speak ON' : 'Auto-speak OFF'}
-              </Text>
-            </TouchableOpacity>
-
-            {!ttsReady && ttsEnabled ? (
-              <Text style={[styles.ttsStatus, { color: colors.textSecondary }]}>
-                {ttsLoading
-                  ? 'Loading voice…'
-                  : ttsError
-                    ? `Voice failed: ${ttsError}`
-                    : 'Voice not loaded'}
-              </Text>
-            ) : ttsSpeaking ? (
-              <Text style={[styles.ttsStatus, { color: colors.primary }]}>
-                🔊 Speaking…
-              </Text>
-            ) : null}
-
-            {ttsSpeaking && (
               <TouchableOpacity
                 style={[
-                  styles.ttsStop,
-                  { backgroundColor: colors.inputBackground },
-                ]}
-                onPress={stopTts}
-                activeOpacity={0.82}
-              >
-                <Ionicons name="stop" size={16} color={colors.error} />
-                <Text style={[styles.ttsStopText, { color: colors.error }]}>
-                  Stop
-                </Text>
-              </TouchableOpacity>
-            )}
-          </View>
-
-          {/* Voice recording / transcribing indicator */}
-          {(isVoiceRecording || isTranscribing) && (
-            <View
-              style={[
-                styles.voiceIndicator,
-                {
-                  backgroundColor: isVoiceRecording ? '#FEE2E2' : '#DBEAFE',
-                  borderTopColor: colors.border,
-                },
-              ]}
-            >
-              <View style={styles.voiceIndicatorIcon}>
-                {isTranscribing ? (
-                  <ActivityIndicator size="small" color={colors.primary} />
-                ) : (
-                  <View style={styles.recordingPulse} />
-                )}
-              </View>
-              <View style={styles.voiceIndicatorTextContainer}>
-                <Text
-                  style={[
-                    styles.voiceIndicatorText,
-                    { color: isVoiceRecording ? colors.error : colors.primary },
-                  ]}
-                >
-                  {isVoiceRecording
-                    ? 'Recording… Tap mic to stop'
-                    : 'Transcribing speech…'}
-                </Text>
-                {isVoiceRecording && partialText.length > 0 && (
-                  <Text
-                    style={[styles.partialTranscript, { color: colors.text }]}
-                    numberOfLines={2}
-                  >
-                    {partialText}
-                  </Text>
-                )}
-              </View>
-            </View>
-          )}
-
-          {/* Voice error message */}
-          {(voiceError || sttError) && !isVoiceRecording && !isTranscribing && (
-            <View
-              style={[styles.voiceErrorBar, { borderTopColor: colors.border }]}
-            >
-              <Text style={[styles.voiceErrorText, { color: colors.error }]}>
-                {voiceError ?? `Speech model: ${sttError}`}
-              </Text>
-            </View>
-          )}
-
-          {/* STT status (terminal holds the full logs) */}
-          <View
-            style={[
-              styles.sttBar,
-              {
-                backgroundColor: colors.surface,
-                borderTopColor: colors.border,
-              },
-            ]}
-          >
-            <View style={styles.sttStatusRow}>
-              <View
-                style={[
-                  styles.statusDotSmall,
+                  premium.hearChip,
                   {
-                    backgroundColor: sttReady
-                      ? colors.success
-                      : sttLoading
-                        ? colors.primary
-                        : colors.textSecondary,
+                    backgroundColor: ttsEnabled
+                      ? colors.text
+                      : colors.inputBackground,
                   },
                 ]}
-              />
-              <Text
-                style={[styles.sttStatusText, { color: colors.textSecondary }]}
+                onPress={() => setTtsEnabled(!ttsEnabled)}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Toggle auto-speak"
+                accessibilityState={{ selected: ttsEnabled }}
               >
-                {sttLoading
-                  ? `Loading ${selectedLanguage.label} speech model…`
-                  : sttReady
-                    ? `${selectedLanguage.label} speech model ready`
-                    : sttError
-                      ? `Speech model failed: ${sttError}`
-                      : 'Speech model not loaded'}
+                {ttsEnabled ? (
+                  <Volume2 size={14} color={colors.background} />
+                ) : (
+                  <VolumeX size={14} color={colors.textSecondary} />
+                )}
+                <Text
+                  style={[
+                    premium.hearChipText,
+                    {
+                      color: ttsEnabled
+                        ? colors.background
+                        : colors.textSecondary,
+                    },
+                  ]}
+                >
+                  Hear
+                </Text>
+              </TouchableOpacity>
+              <Text
+                style={[premium.utilStatus, { color: colors.textSecondary }]}
+                numberOfLines={1}
+              >
+                {ttsSpeaking
+                  ? 'Speaking...'
+                  : sttLoading || ttsLoading
+                    ? 'Loading voice...'
+                    : sttReady && ttsReady
+                      ? 'Voice ready'
+                      : sttError || ttsError
+                        ? 'Voice failed'
+                        : 'Voice off'}
               </Text>
+              {ttsSpeaking ? (
+                <TouchableOpacity
+                  onPress={stopTts}
+                  activeOpacity={0.8}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Stop speaking"
+                >
+                  <Square size={16} color={colors.error} fill={colors.error} />
+                </TouchableOpacity>
+              ) : null}
+              {messages.length > 0 ? (
+                <TouchableOpacity
+                  onPress={handleClearChat}
+                  activeOpacity={0.8}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear chat messages"
+                >
+                  <Trash2 size={16} color={colors.textSecondary} />
+                </TouchableOpacity>
+              ) : null}
             </View>
           </View>
 
           <View
-            style={[
-              styles.inputContainer,
-              {
-                backgroundColor: colors.surface,
-                borderTopColor: colors.border,
-              },
-            ]}
+            style={{
+              paddingHorizontal: Spacing.lg,
+              paddingBottom: kbHeight > 0 ? kbHeight + 12 : chatBottomPad,
+            }}
           >
-            <TextInput
-              value={message}
-              onChangeText={setMessage}
-              placeholder={
-                isVoiceRecording ? 'Recording…' : 'Type a message...'
-              }
-              placeholderTextColor={colors.textSecondary}
+            <View
               style={[
-                styles.input,
-                { backgroundColor: colors.inputBackground, color: colors.text },
-              ]}
-              multiline
-              editable={!isVoiceRecording && !isTranscribing}
-            />
-
-            {/* Mic button — voice-to-text */}
-            <TouchableOpacity
-              style={[
-                styles.micButton,
+                premium.composer,
                 {
-                  backgroundColor: isVoiceRecording
-                    ? colors.error
-                    : isTranscribing
-                      ? colors.inputBackground
-                      : colors.inputBackground,
+                  backgroundColor: colors.card,
+                  borderColor: colors.glassBorder,
                 },
+                Shadows.floating,
               ]}
-              onPress={handleVoiceToggle}
-              disabled={isTranscribing}
-              activeOpacity={0.82}
-              accessibilityRole="button"
-              accessibilityLabel={
-                isVoiceRecording ? 'Stop recording' : 'Record voice message'
-              }
-              accessibilityState={{ disabled: isTranscribing }}
             >
-              {isTranscribing ? (
-                <ActivityIndicator size="small" color={colors.primary} />
-              ) : (
-                <Ionicons
-                  name={isVoiceRecording ? 'stop' : 'mic'}
-                  size={20}
-                  color={isVoiceRecording ? '#FFFFFF' : colors.primary}
-                />
-              )}
-            </TouchableOpacity>
-
-            {/* Send button */}
-            <TouchableOpacity
-              style={[
-                styles.sendButton,
-                {
-                  backgroundColor: message.trim()
-                    ? colors.primary
-                    : colors.inputBackground,
-                },
-              ]}
-              disabled={!message.trim() || isVoiceRecording || isTranscribing}
-              onPress={sendMessage}
-              activeOpacity={0.82}
-              accessibilityRole="button"
-              accessibilityLabel="Send message"
-              accessibilityState={{
-                disabled:
-                  !message.trim() || isVoiceRecording || isTranscribing,
-              }}
-            >
-              <Ionicons
-                name="send"
-                size={18}
-                color={message.trim() ? '#FFFFFF' : colors.textSecondary}
+              <TextInput
+                value={message}
+                onChangeText={setMessage}
+                placeholder={
+                  isVoiceRecording ? 'Recording...' : 'Type a message...'
+                }
+                placeholderTextColor={colors.textSecondary}
+                style={[
+                  styles.input,
+                  {
+                    backgroundColor: colors.inputBackground,
+                    color: colors.text,
+                    borderRadius: Radius.md,
+                  },
+                ]}
+                multiline
+                editable={!isVoiceRecording && !isTranscribing}
               />
-            </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  premium.circleBtn,
+                  {
+                    backgroundColor: isVoiceRecording
+                      ? colors.error
+                      : colors.inputBackground,
+                  },
+                ]}
+                onPress={handleVoiceToggle}
+                disabled={isTranscribing}
+                activeOpacity={0.85}
+              >
+                {isTranscribing ? (
+                  <ActivityIndicator size="small" color={colors.primary} />
+                ) : isVoiceRecording ? (
+                  <Square size={18} color="#FFF" fill="#FFF" />
+                ) : (
+                  <Mic size={20} color={colors.primary} />
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  premium.circleBtn,
+                  {
+                    backgroundColor: message.trim()
+                      ? '#CF5C36'
+                      : colors.inputBackground,
+                  },
+                ]}
+                disabled={!message.trim() || isVoiceRecording || isTranscribing}
+                onPress={sendMessage}
+                activeOpacity={0.85}
+              >
+                <Send
+                  size={18}
+                  color={message.trim() ? '#FFFFFF' : colors.textSecondary}
+                />
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       )}
     </SafeAreaView>
   );
 }
+
+const premium = {
+  headerPad: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.md },
+  nameInput: {
+    borderWidth: 1,
+    minHeight: 50,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    fontSize: 15,
+    marginTop: 8,
+    marginBottom: 10,
+  },
+  primaryBtn: {
+    minHeight: 54,
+    borderRadius: 999,
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    gap: 8,
+  },
+  primaryBtnText: { fontSize: 15, fontWeight: '700' as const },
+  ghostBtn: {
+    minHeight: 46,
+    borderRadius: 14,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    marginTop: 8,
+  },
+  ghostText: { fontSize: 14, fontWeight: '600' as const },
+  rowBetween: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+  },
+  rowGap: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 8,
+  },
+  miniBtn: {
+    minWidth: 82,
+    height: 40,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+  },
+  miniBtnText: {
+    color: '#FFF8EC',
+    fontSize: 14,
+    fontWeight: '700' as const,
+  },
+  mono: { fontSize: 11, marginTop: 2 },
+  empty: { alignItems: 'center' as const, paddingVertical: 28 },
+  errorText: { fontSize: 13, fontWeight: '600' as const, lineHeight: 18 },
+  linkText: { fontSize: 13, fontWeight: '700' as const, marginTop: 2 },
+  dot: { width: 10, height: 10, borderRadius: 5 },
+  hintLine: {
+    textAlign: 'center' as const,
+    fontSize: 12,
+    fontWeight: '600' as const,
+    paddingHorizontal: Spacing.lg,
+    marginTop: 6,
+  },
+  utilRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 10,
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  hearChip: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+  },
+  hearChipText: { fontSize: 13, fontWeight: '700' as const },
+  utilStatus: { flex: 1, fontSize: 12, fontWeight: '600' as const },
+  composer: {
+    flexDirection: 'row' as const,
+    alignItems: 'flex-end' as const,
+    gap: 8,
+    padding: 10,
+    borderRadius: 20,
+    borderWidth: 1,
+  },
+  circleBtn: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+  },
+};

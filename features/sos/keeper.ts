@@ -93,7 +93,8 @@ function notifyExpired(): void {
 async function keeperTask(taskData?: { deadlineAt?: number }): Promise<void> {
   const deadline = taskData?.deadlineAt ?? 0;
   // Poll fast enough that SOS fires within seconds of the deadline,
-  // slow enough to sip battery over an 8h shift.
+  // slow enough to sip battery over an 8h shift. Tighten to 1s in the
+  // final minute so background trigger jitter drops from 0-4s to 0-1s.
   for (;;) {
     try {
       if (!BG?.isRunning()) return;
@@ -104,7 +105,9 @@ async function keeperTask(taskData?: { deadlineAt?: number }): Promise<void> {
       notifyExpired();
       return;
     }
-    await sleep(4000);
+    const msLeft =
+      deadline > 0 ? deadline - Date.now() : Number.MAX_SAFE_INTEGER;
+    await sleep(msLeft < 60 * 1000 ? 1000 : 4000);
   }
 }
 

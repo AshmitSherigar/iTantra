@@ -5,6 +5,7 @@ import {
   disconnect,
   discoverServices,
   requestMTU,
+  setPreferredPhy,
   stopAdvertising,
   stopScan,
   subscribeToCharacteristic,
@@ -12,9 +13,12 @@ import {
   writeCharacteristic,
 } from 'react-native-bluetooth-ble';
 import {
+  BLE_CHUNK_DELAY_FAST_MS,
+  BLE_MTU_FALLBACK_BYTES,
   RX_CHARACTERISTIC_UUID,
   SERVICE_UUID,
   TX_CHARACTERISTIC_UUID,
+  blePayloadBytesForMtu,
 } from './constants';
 import { textToHex } from './codec';
 import { sendHexFramed } from './transport';
@@ -65,6 +69,14 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
 
   const removeCentralValueListenersRef = useRef(new Map<string, () => void>());
   const connectingDeviceIdsRef = useRef(new Set<string>());
+  // Negotiated GATT payload ceiling per central link (bytes). Links that
+  // never negotiate stay at the 20B fallback; negotiated links use up to
+  // 240B → ~12x fewer packets for the same envelope.
+  const mtuBytesByDeviceRef = useRef(new Map<string, number>());
+
+  const getMaxBytesForDevice = useCallback((deviceId: string): number => {
+    return mtuBytesByDeviceRef.current.get(deviceId) ?? BLE_MTU_FALLBACK_BYTES;
+  }, []);
   const removePeripheralWriteListenerRef = useRef<(() => void) | undefined>(
     undefined,
   );
@@ -83,6 +95,7 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
         removeCentralValueListenersRef.current.get(id)?.();
       } catch {}
       removeCentralValueListenersRef.current.delete(id);
+      mtuBytesByDeviceRef.current.delete(id);
     });
     setConnectedDeviceIds((current) => current.filter((d) => !dead.has(d)));
     setConnectedDeviceId((current) =>
@@ -92,9 +105,11 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
 
   useEffect(() => {
     const centralListeners = removeCentralValueListenersRef.current;
+    const mtuMap = mtuBytesByDeviceRef.current;
     return () => {
       centralListeners.forEach((remove) => remove());
       centralListeners.clear();
+      mtuMap.clear();
       removePeripheralWriteListenerRef.current?.();
       removePeripheralSubscribedListenerRef.current?.();
       removePeripheralUnsubscribedListenerRef.current?.();
@@ -291,13 +306,25 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
         );
 
         try {
-          await requestMTU(deviceId, 512);
+          const negotiated = await requestMTU(deviceId, 512);
+          const usable = blePayloadBytesForMtu(
+            typeof negotiated === 'number' ? negotiated : 23,
+          );
+          mtuBytesByDeviceRef.current.set(deviceId, usable);
+          console.log(`[BLE] link MTU ready: ${deviceId} payload=${usable}B`);
         } catch (e) {
+          mtuBytesByDeviceRef.current.set(deviceId, BLE_MTU_FALLBACK_BYTES);
           console.log(
             'MTU request failed (non-fatal, using 20-byte chunks):',
             e,
           );
         }
+        // Best-effort 2M PHY for 2x air speed. Rejects on iOS/older
+        // chipsets — caught and ignored, link stays on 1M.
+        try {
+          await setPreferredPhy(deviceId, 'le2m', 'le2m');
+          console.log(`[BLE] 2M PHY requested: ${deviceId}`);
+        } catch {}
         console.log('CONNECT COMPLETE');
       } catch (error) {
         console.log('CONNECT ERROR:', error);
@@ -318,15 +345,28 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
   );
 
   const writeCentralPacket = useCallback(
-    (deviceId: string, packetHex: string) => {
-      if (!deviceId) return Promise.resolve();
-      return writeCharacteristic(
-        deviceId,
-        SERVICE_UUID,
-        RX_CHARACTERISTIC_UUID,
-        packetHex,
-        'write',
-      );
+    async (deviceId: string, packetHex: string) => {
+      if (!deviceId) return;
+      // writeWithoutResponse skips the GATT ACK round trip (~30-50ms per
+      // packet). Fall back to acknowledged write when the stack rejects it.
+      try {
+        await writeCharacteristic(
+          deviceId,
+          SERVICE_UUID,
+          RX_CHARACTERISTIC_UUID,
+          packetHex,
+          'writeWithoutResponse',
+        );
+      } catch (e) {
+        console.log('[BLE] WOR write failed, retrying with response:', e);
+        await writeCharacteristic(
+          deviceId,
+          SERVICE_UUID,
+          RX_CHARACTERISTIC_UUID,
+          packetHex,
+          'write',
+        );
+      }
     },
     [],
   );
@@ -349,6 +389,9 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
         return false;
       }
       try {
+        const mtuBytes = connectedDeviceId
+          ? getMaxBytesForDevice(connectedDeviceId)
+          : BLE_MTU_FALLBACK_BYTES;
         await sendHexFramed(
           textToHex(trimmed),
           (packetHex) =>
@@ -356,6 +399,8 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
           notifyPeripheralPacket,
           {
             isCentral: !!connectedDeviceId,
+            maxBytesPerPacket: mtuBytes,
+            chunkDelayMs: BLE_CHUNK_DELAY_FAST_MS,
           },
         );
         addMessage(trimmed, 'me');
@@ -368,6 +413,7 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
     [
       addMessage,
       connectedDeviceId,
+      getMaxBytesForDevice,
       notifyPeripheralPacket,
       peripheralCentralId,
       writeCentralPacket,
@@ -385,6 +431,7 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
       envelope: BroadcastEnvelope,
     ): Promise<{ delivered: number; attempted: number }> => {
       if (!envelope.message.trim()) return { delivered: 0, attempted: 0 };
+      const txStarted = Date.now();
       // Snapshot: state may change mid-flight, count what we tried now.
       const centrals = [...connectedDeviceIds];
       const centralSubscribers = peripheralCentralIds.length > 0;
@@ -400,7 +447,11 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
             payload,
             (packetHex) => writeCentralPacket(deviceId, packetHex),
             notifyPeripheralPacket,
-            { isCentral: true },
+            {
+              isCentral: true,
+              maxBytesPerPacket: getMaxBytesForDevice(deviceId),
+              chunkDelayMs: BLE_CHUNK_DELAY_FAST_MS,
+            },
           ),
         ),
       );
@@ -425,6 +476,11 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
             notifyPeripheralPacket,
             {
               isCentral: false,
+              // Remote central MTU is unknown on the peripheral side —
+              // stay at the 20B fallback for reliability, but drop the
+              // legacy 30ms pacing to the fast gap.
+              maxBytesPerPacket: BLE_MTU_FALLBACK_BYTES,
+              chunkDelayMs: BLE_CHUNK_DELAY_FAST_MS,
             },
           );
           delivered += 1;
@@ -432,10 +488,17 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
           console.log('Broadcast notify failed:', error);
         }
       }
+      const mtuSummary = centrals
+        .map((id) => `${id.slice(-4)}:${getMaxBytesForDevice(id)}B`)
+        .join(',');
+      console.log(
+        `[MeshTiming] tx id=${envelope.id} delivered=${delivered}/${attempted} txMs=${Date.now() - txStarted} mtu=[${mtuSummary}]`,
+      );
       return { delivered, attempted };
     },
     [
       connectedDeviceIds,
+      getMaxBytesForDevice,
       notifyPeripheralPacket,
       peripheralCentralIds,
       pruneCentralLinks,
@@ -449,6 +512,36 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
       return delivered > 0;
     },
     [sendBroadcastDetailed],
+  );
+
+  /**
+   * Point-to-point send down ONE open central link (device-search ranging).
+   * Peripheral-side links can't be targeted (a notify reaches every
+   * subscribed central), so those resolve false and the caller falls back
+   * to a single-hop broadcast ping.
+   */
+  const sendToDevice = useCallback(
+    async (
+      deviceId: string,
+      envelope: BroadcastEnvelope,
+    ): Promise<boolean> => {
+      if (!deviceId || !envelope.message.trim()) return false;
+      if (!connectedDeviceIds.includes(deviceId)) return false;
+      try {
+        const payload = textToHex(encodeBroadcast(envelope));
+        await sendHexFramed(
+          payload,
+          (packetHex) => writeCentralPacket(deviceId, packetHex),
+          notifyPeripheralPacket,
+          { isCentral: true },
+        );
+        return true;
+      } catch (error) {
+        console.log('[Range] unicast send failed:', error);
+        return false;
+      }
+    },
+    [connectedDeviceIds, notifyPeripheralPacket, writeCentralPacket],
   );
 
   const disconnectFromDevice = useCallback(async () => {
@@ -500,5 +593,6 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
     sendTextOverBLE: sendText,
     sendBroadcast,
     sendBroadcastDetailed,
+    sendToDevice,
   };
 }

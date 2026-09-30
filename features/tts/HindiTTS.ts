@@ -7,6 +7,7 @@ import type {
   TtsStreamController,
 } from 'react-native-sherpa-onnx/tts';
 import { ITTSService, HindiTTSConfig, TTSStatus } from './types';
+import { resolveSpeechModelConfig } from '../models/modelPaths';
 
 // Target size for one smooth native synthesis. Fewer, larger generations
 // = fewer inter-chunk pauses. Native streams PCM progressively inside a
@@ -172,7 +173,9 @@ class HindiTTS implements ITTSService {
     }
 
     try {
-      const modelPathConfig = { type: 'asset', path: modelPath } as const;
+      // Prefer the Play Asset Delivery pack (single on-disk copy, no
+      // extraction); fall back to APK assets on dev builds.
+      const modelPathConfig = await resolveSpeechModelConfig(modelPath);
 
       if (config?.debug) {
         console.log('[VoiceTTS] Detecting model...');

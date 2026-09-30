@@ -10,8 +10,10 @@ import {
   containsReplacementChar,
   decodeBroadcast,
   emitBroadcast,
+  isRangeEnvelope,
   looksLikeBroadcastJson,
 } from './broadcast';
+import { emitRangePing } from '../proximity/rangeBus';
 import { BleIncomingTextTracker } from '../tts/bleTtsText';
 
 export type StreamTts = {
@@ -107,6 +109,17 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
       const streamed = opts?.streamed === true;
       const broadcast = decodeBroadcast(text);
       if (broadcast) {
+        // Device-search ranging pings are point-to-point: route them to the
+        // range-only bus — never the flood bus (no relay, no inboxes/TTS).
+        if (isRangeEnvelope(broadcast)) {
+          if (streamed) {
+            try {
+              ttsRef.current.discardStream();
+            } catch {}
+          }
+          emitRangePing(broadcast);
+          return;
+        }
         // Mesh broadcast (homepage flood): shared de-dup lives in
         // broadcast.ts. emitBroadcast shows the Alert via subscribers AND
         // triggers the one-time relay to other nearby phones. Duplicates

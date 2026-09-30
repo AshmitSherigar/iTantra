@@ -15,8 +15,10 @@ type ModelApis = {
 
 /**
  * Heavy-model lifecycle: STT (~200MB) + TTS (~114MB) load only after the two
- * devices connect, and are destroyed on disconnect so RAM is freed. ONLY the
- * selected language's models are ever resident.
+ * devices connect, and are destroyed on disconnect so RAM is freed. The
+ * selected language is preloaded; incoming messages in another bundled
+ * language switch the shared TTS voice per message (one voice resident at
+ * a time).
  */
 export function useBleModels(
   isChatConnected: boolean,
@@ -32,12 +34,22 @@ export function useBleModels(
     endStream,
   } = apis;
   const wasConnectedRef = useRef(false);
+  const loadedLanguageIdRef = useRef<string | null>(null);
   const apisRef = useRef(apis);
   apisRef.current = apis;
 
   useEffect(() => {
-    if (isChatConnected && !wasConnectedRef.current) {
+    // (Re)load when connecting fresh OR when the language changes
+    // mid-chat — previously a mid-chat switch was ignored and the old
+    // voice kept speaking (or nothing spoke after an eviction).
+    const needsLoad =
+      (isChatConnected && !wasConnectedRef.current) ||
+      (isChatConnected &&
+        wasConnectedRef.current &&
+        loadedLanguageIdRef.current !== selectedLanguage.id);
+    if (needsLoad) {
       wasConnectedRef.current = true;
+      loadedLanguageIdRef.current = selectedLanguage.id;
       if (!isLanguageInstalled(selectedLanguage)) {
         console.log(
           `[Models] Peer connected but "${selectedLanguage.label}" is not installed — skipping model load.`,
@@ -65,26 +77,30 @@ export function useBleModels(
         return;
       }
       console.log(
-        `[Models] Peer connected — loading ${selectedLanguage.label} STT (${selectedLanguage.sttAssetPath}) + TTS (${selectedLanguage.ttsAssetPath})…`,
+        `[Models] Peer connected — loading ${selectedLanguage.label} TTS (${selectedLanguage.ttsAssetPath}) + STT (${selectedLanguage.sttAssetPath})…`,
       );
-      // SEQUENTIAL, not concurrent: ONNX model load transiently needs ~2x
-      // the model size (file buffer + graph + tensors). Loading one, yielding,
-      // then the other keeps peak near ~500MB instead of ~700MB+ (LMK kill).
+      // TTS FIRST: it is smaller (~114MB vs ~200MB) and incoming chat is
+      // mute until it loads — previously STT blocked the voice for the
+      // whole load window while speak calls silently dropped. SEQUENTIAL,
+      // not concurrent: ONNX load transiently needs ~2x the model size
+      // (file buffer + graph + tensors); one at a time keeps peak near
+      // ~500MB instead of ~700MB+ (LMK kill).
       void (async () => {
-        try {
-          await ensureSttReady(selectedLanguage.sttAssetPath!);
-        } catch (e) {
-          console.warn('[Models] STT load failed, continuing to TTS:', e);
-        }
-        await new Promise((r) => setTimeout(r, 500));
         try {
           await ensureTtsReady(selectedLanguage.ttsAssetPath!);
         } catch (e) {
-          console.warn('[Models] TTS load failed:', e);
+          console.warn('[Models] TTS load failed, continuing to STT:', e);
+        }
+        await new Promise((r) => setTimeout(r, 500));
+        try {
+          await ensureSttReady(selectedLanguage.sttAssetPath!);
+        } catch (e) {
+          console.warn('[Models] STT load failed:', e);
         }
       })();
     } else if (!isChatConnected && wasConnectedRef.current) {
       wasConnectedRef.current = false;
+      loadedLanguageIdRef.current = null;
       console.log('[Models] Peer disconnected — releasing STT + TTS models…');
       try {
         apisRef.current.stopTts();

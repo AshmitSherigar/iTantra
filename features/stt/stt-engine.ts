@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import { createSTT } from 'react-native-sherpa-onnx/stt';
+import { resolveSpeechModelConfig } from '../models/modelPaths';
 
 type STTInstance = Awaited<ReturnType<typeof createSTT>>;
 
@@ -96,12 +97,11 @@ export class STTEngine {
 
     this.initPromise = (async () => {
       try {
+        // Prefer the Play Asset Delivery pack (single on-disk copy, no
+        // extraction); fall back to APK assets on dev builds.
+        const modelPathConfig = await resolveSpeechModelConfig(modelPath);
         this.stt = await createSTT({
-          modelPath: {
-            type: 'asset',
-            // Points to the named subdirectory under assets/models/
-            path: modelPath,
-          },
+          modelPath: modelPathConfig,
           modelType: 'nemo_ctc',
           preferInt8: true,
           debug: true,

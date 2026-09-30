@@ -25,7 +25,9 @@ export function buildSosHelpText(input: {
   ) {
     const lat = input.lat.toFixed(5);
     const lon = input.lon.toFixed(5);
-    locationLine = ` Location: ${lat},${lon} (https://maps.google.com/?q=${lat},${lon})`;
+    // No inline URL — receivers open location via the Map button, which is
+    // built from the structured sos.lat/lon (with legacy URL fallback).
+    locationLine = ` Location: ${lat},${lon}`;
   }
   const workPart = workspace ? ` [${workspace}]` : '';
   return `${SOS_MESSAGE_PREFIX}${workPart} — ${mode}. ${help}.${locationLine}`;

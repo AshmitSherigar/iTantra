@@ -19,6 +19,28 @@ export type SosMeta = {
   lon?: number;
 };
 
+/**
+ * Device-search proximity ping (Device Search Mode).
+ *
+ * Carried on the same flood mesh as chat/SOS so no new connection is needed:
+ * the seeker pings ~every 2.5s while tracking a target, and the target's
+ * phone replies with its own measurement — both sides show approximate
+ * distance. Old app versions (no `range` support) display the benign
+ * `message` text as a normal broadcast.
+ */
+export type RangeMeta = {
+  /** Random per-screen-open id so replies match one tracking session. */
+  sessionId: string;
+  /** Display name of the phone being sought. */
+  targetName: string;
+  /** Display name of the seeker (author of this ping). */
+  seekerName: string;
+  /** Seeker's smoothed RSSI of the target, when it has one. */
+  seekerRssi?: number;
+  /** Final ping when tracking stops — peer clears its "being sought" card. */
+  bye?: boolean;
+};
+
 export type BroadcastEnvelope = {
   type: typeof BROADCAST_MESSAGE_TYPE;
   id: string;
@@ -35,9 +57,11 @@ export type BroadcastEnvelope = {
    * Optional discriminator. Old app versions ignore it and still display
    * the message as a normal broadcast (forward compatible).
    */
-  kind?: 'sos' | 'normal';
+  kind?: 'sos' | 'normal' | 'range';
   /** Present only when kind === 'sos'. */
   sos?: SosMeta;
+  /** Present only when kind === 'range'. */
+  range?: RangeMeta;
 };
 
 type BroadcastSender = (envelope: BroadcastEnvelope) => Promise<boolean>;
@@ -56,6 +80,19 @@ const broadcastListeners = new Set<BroadcastListener>();
  * instead of alerting twice or relaying forever.
  */
 const seenBroadcastIds = new Set<string>();
+/** Bound the de-dup set so long-lived runtimes don't grow without limit. */
+const MAX_SEEN_BROADCAST_IDS = 1000;
+
+function pruneSeenBroadcastIds(): void {
+  if (seenBroadcastIds.size <= MAX_SEEN_BROADCAST_IDS) return;
+  const overflow = seenBroadcastIds.size - MAX_SEEN_BROADCAST_IDS;
+  const iterator = seenBroadcastIds.values();
+  for (let i = 0; i < overflow; i++) {
+    const next = iterator.next();
+    if (next.done) break;
+    seenBroadcastIds.delete(next.value);
+  }
+}
 
 export function makeBroadcastId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -109,6 +146,16 @@ export function isSosEnvelope(envelope: {
   return msg.startsWith(SOS_MESSAGE_PREFIX) || msg.startsWith('🆘');
 }
 
+/**
+ * True for device-search proximity pings. These must NEVER land in chat
+ * inboxes, SOS inboxes, or TTS — every broadcast subscriber filters them
+ * out first and only the search screen consumes them.
+ */
+export function isRangeEnvelope(envelope: { kind?: string }): boolean {
+  if (!envelope) return false;
+  return (envelope as BroadcastEnvelope).kind === 'range';
+}
+
 export function getEnvelopeTtl(envelope: { ttl?: number }): number {
   const ttl =
     typeof envelope?.ttl === 'number' && Number.isFinite(envelope.ttl)
@@ -156,11 +203,35 @@ export function hasSeenBroadcast(id: string): boolean {
 }
 
 export function markBroadcastSeen(id: string): void {
-  if (id) seenBroadcastIds.add(id);
+  if (!id) return;
+  seenBroadcastIds.add(id);
+  pruneSeenBroadcastIds();
 }
 
 export function encodeBroadcast(envelope: BroadcastEnvelope): string {
-  return JSON.stringify(envelope);
+  // Compact form: omit defaults the decoder already fills in (ttl=5,
+  // kind='normal'). Saves ~25B (~1+ 20B packets) with zero wire break —
+  // old builds ignore unknown/missing fields the same way.
+  const out: Record<string, unknown> = {
+    type: envelope.type,
+    id: envelope.id,
+    senderName: envelope.senderName,
+    message: envelope.message,
+    language: envelope.language,
+  };
+  if (
+    typeof envelope.ttl === 'number' &&
+    Number.isFinite(envelope.ttl) &&
+    Math.floor(envelope.ttl) !== MESH_DEFAULT_TTL
+  ) {
+    out.ttl = Math.floor(envelope.ttl);
+  }
+  if (envelope.kind === 'sos' || envelope.kind === 'range') {
+    out.kind = envelope.kind;
+  }
+  if (envelope.sos !== undefined) out.sos = envelope.sos;
+  if (envelope.range !== undefined) out.range = envelope.range;
+  return JSON.stringify(out);
 }
 
 export function decodeBroadcast(text: string): BroadcastEnvelope | null {
@@ -184,7 +255,9 @@ export function decodeBroadcast(text: string): BroadcastEnvelope | null {
         ? Math.max(0, Math.min(Math.floor(candidate.ttl), MESH_DEFAULT_TTL))
         : MESH_DEFAULT_TTL;
     const kind =
-      candidate.kind === 'sos' || candidate.kind === 'normal'
+      candidate.kind === 'sos' ||
+      candidate.kind === 'normal' ||
+      candidate.kind === 'range'
         ? candidate.kind
         : undefined;
     // Preserve structured SOS meta when present; drop it when malformed so
@@ -209,7 +282,42 @@ export function decodeBroadcast(text: string): BroadcastEnvelope | null {
         lon: typeof rawSos.lon === 'number' ? rawSos.lon : undefined,
       };
     }
-    return { ...(candidate as BroadcastEnvelope), ttl, kind, sos };
+    // Preserve structured range meta when present; drop it when malformed so
+    // one bad sender can't wedge the search screen.
+    let range: RangeMeta | undefined;
+    const rawRange = candidate.range as Partial<RangeMeta> | undefined;
+    if (kind === 'range' && rawRange && typeof rawRange === 'object') {
+      const sessionId =
+        typeof rawRange.sessionId === 'string'
+          ? rawRange.sessionId.slice(0, 16)
+          : '';
+      const targetName =
+        typeof rawRange.targetName === 'string'
+          ? rawRange.targetName.slice(0, 32)
+          : '';
+      const seekerName =
+        typeof rawRange.seekerName === 'string'
+          ? rawRange.seekerName.slice(0, 32)
+          : '';
+      if (sessionId && targetName && seekerName) {
+        range = {
+          sessionId,
+          targetName,
+          seekerName,
+          ...(typeof rawRange.seekerRssi === 'number' &&
+          Number.isFinite(rawRange.seekerRssi)
+            ? {
+                seekerRssi: Math.max(
+                  -100,
+                  Math.min(0, Math.round(rawRange.seekerRssi)),
+                ),
+              }
+            : {}),
+          ...(rawRange.bye === true ? { bye: true as const } : {}),
+        };
+      }
+    }
+    return { ...(candidate as BroadcastEnvelope), ttl, kind, sos, range };
   } catch {
     return null;
   }
@@ -257,6 +365,7 @@ export function subscribeToBroadcasts(listener: BroadcastListener): () => void {
 export function emitBroadcast(envelope: BroadcastEnvelope): boolean {
   if (!envelope?.id || seenBroadcastIds.has(envelope.id)) return false;
   seenBroadcastIds.add(envelope.id);
+  pruneSeenBroadcastIds();
   broadcastListeners.forEach((listener) => {
     try {
       listener(envelope);
@@ -287,6 +396,8 @@ export type MeshPeerInfo = {
   id: string;
   name: string;
   rssi?: number;
+  /** Calibrated Tx power from the advertisement, when the sender provides it. */
+  txPower?: number;
 };
 
 export type MeshStatus = {
@@ -298,12 +409,20 @@ export type MeshStatus = {
   peers: MeshPeerInfo[];
   /** Connected mesh links (central + peripheral sides combined). */
   connectedCount: number;
+  /** BLE ids with an open central (GATT) link — for live readRSSI ranging. */
+  connectedIds: string[];
   /** Last mesh broadcast result for the homepage hint line. */
   lastResult: string | null;
   /** Links confirmed delivered in the last flood round. */
   lastDelivered: number;
   /** Links attempted in the last flood round. */
   lastAttempted: number;
+  /** Wall-clock ms spent scanning in the last flood round (P0 timing). */
+  lastScanMs: number | null;
+  /** Wall-clock ms spent transmitting in the last flood round (P0 timing). */
+  lastTxMs: number | null;
+  /** Total wall-clock ms for the last flood round (scan+settle+tx). */
+  lastTotalMs: number | null;
 };
 
 type MeshStatusListener = (status: MeshStatus) => void;
@@ -313,9 +432,13 @@ let meshStatus: MeshStatus = {
   isScanning: false,
   peers: [],
   connectedCount: 0,
+  connectedIds: [],
   lastResult: null,
   lastDelivered: 0,
   lastAttempted: 0,
+  lastScanMs: null,
+  lastTxMs: null,
+  lastTotalMs: null,
 };
 
 const meshStatusListeners = new Set<MeshStatusListener>();

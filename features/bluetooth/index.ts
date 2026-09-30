@@ -10,4 +10,5 @@ export * from './useBleConnection';
 export * from './useBleModels';
 export * from './useMeshSpeech';
 export * from './broadcast';
+export * from './sosPing';
 export { default as AndroidNearbyBroadcastRuntime } from './AndroidNearbyBroadcastRuntime';
