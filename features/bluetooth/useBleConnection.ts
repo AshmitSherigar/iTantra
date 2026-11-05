@@ -19,6 +19,7 @@ import {
 import { textToHex } from './codec';
 import { sendHexFramed } from './transport';
 import { encodeBroadcast, type BroadcastEnvelope } from './broadcast';
+import { benchmarkLogger } from '../benchmark/BenchmarkLogger';
 
 type UseBleConnectionOpts = {
   handleIncomingHex: (
@@ -217,6 +218,9 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
       }
       connectingDeviceIdsRef.current.add(deviceId);
       setIsConnecting(true);
+      const connectTraceId = benchmarkLogger.generateTraceId('ble-connect');
+      benchmarkLogger.logEvent('BLE_CONNECT_START', connectTraceId);
+      let connectOutcome: 'success' | 'failure' = 'failure';
 
       try {
         console.log('CONNECT START — Device:', deviceId);
@@ -299,6 +303,7 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
           );
         }
         console.log('CONNECT COMPLETE');
+        connectOutcome = 'success';
       } catch (error) {
         console.log('CONNECT ERROR:', error);
         removeCentralValueListenersRef.current.get(deviceId)?.();
@@ -310,6 +315,9 @@ export function useBleConnection(opts: UseBleConnectionOpts) {
           current === deviceId ? null : current,
         );
       } finally {
+        benchmarkLogger.logEvent('BLE_CONNECT_END', connectTraceId, {
+          extraInfo: connectOutcome,
+        });
         connectingDeviceIdsRef.current.delete(deviceId);
         setIsConnecting(false);
       }

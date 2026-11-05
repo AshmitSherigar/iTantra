@@ -13,6 +13,7 @@ import {
   looksLikeBroadcastJson,
 } from './broadcast';
 import { BleIncomingTextTracker } from '../tts/bleTtsText';
+import { benchmarkLogger } from '../benchmark/BenchmarkLogger';
 
 export type StreamTts = {
   speakFullMessage: (text: string) => void;
@@ -167,8 +168,15 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
       }
       const joined = state.chunks.join('');
       const text = hexToText(joined);
+      const frameId = state.id;
       clearReassembly(sender);
       if (text) {
+        if (frameId) {
+          benchmarkLogger.logEvent('BLE_REASSEMBLY_COMPLETE', frameId, {
+            charCount: text.length,
+            byteCount: Math.floor(joined.length / 2),
+          });
+        }
         // Chunked message: its text was already fed to streaming TTS while
         // packets arrived — handleCompletedText must NOT re-speak it.
         handleCompletedText(text, { streamed: true });
@@ -216,6 +224,9 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
             console.warn('Ignoring invalid START frame:', text);
             return;
           }
+          benchmarkLogger.logEvent('BLE_START_FRAME_RCVD', id, {
+            extraInfo: `total=${total}`,
+          });
           clearReassembly(sender);
           statesRef.current.set(sender, {
             id,
@@ -249,6 +260,10 @@ export function useBleMessages(ttsRef: React.MutableRefObject<StreamTts>) {
           return;
         }
         state.chunks.push(clean);
+        benchmarkLogger.logEvent('BLE_CHUNK_RCVD', state.id, {
+          seqIndex: state.chunks.length - 1,
+          byteCount: Math.floor(clean.length / 2),
+        });
         if (!state.suppressStream) {
           try {
             const joined = state.chunks.join('');
