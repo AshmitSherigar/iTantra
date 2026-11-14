@@ -7,6 +7,7 @@ import type {
   TtsStreamController,
 } from 'react-native-sherpa-onnx/tts';
 import { ITTSService, HindiTTSConfig, TTSStatus } from './types';
+import { benchmarkLogger } from '../benchmark/BenchmarkLogger';
 
 // Target size for one smooth native synthesis. Fewer, larger generations
 // = fewer inter-chunk pauses. Native streams PCM progressively inside a
@@ -156,6 +157,7 @@ class HindiTTS implements ITTSService {
 
   async initialize(config?: HindiTTSConfig): Promise<void> {
     const modelPath = config?.modelPath ?? DEFAULT_TTS_MODEL_PATH;
+    const loadTraceId = benchmarkLogger.generateTraceId('tts-load');
 
     // Idempotent for the same language; switching languages frees the old
     // native engine FIRST so peak RAM never holds two (~228MB would OOM).
@@ -172,6 +174,9 @@ class HindiTTS implements ITTSService {
     }
 
     try {
+      benchmarkLogger.logEvent('TTS_MODEL_LOAD_START', loadTraceId, {
+        extraInfo: modelPath,
+      });
       const modelPathConfig = { type: 'asset', path: modelPath } as const;
 
       if (config?.debug) {
@@ -206,6 +211,10 @@ class HindiTTS implements ITTSService {
         sampleRate,
         numSpeakers,
       };
+      benchmarkLogger.logEvent('TTS_MODEL_LOAD_END', loadTraceId, {
+        extraInfo: 'success',
+        metadata: { sampleRateHz: sampleRate, speakers: numSpeakers },
+      });
 
       if (config?.debug) {
         console.log(
@@ -214,6 +223,9 @@ class HindiTTS implements ITTSService {
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
+      benchmarkLogger.logEvent('TTS_MODEL_LOAD_END', loadTraceId, {
+        extraInfo: `failure:${errorMsg}`,
+      });
       this.activeModelPath = null;
       this.status.error = errorMsg;
       if (config?.debug)
@@ -438,16 +450,39 @@ class HindiTTS implements ITTSService {
         return;
       }
 
+      const traceId = benchmarkLogger.generateTraceId('tts');
+      benchmarkLogger.logEvent('TTS_SYNTH_START', traceId, {
+        charCount: text.length,
+      });
+      let firstChunkDelivered = false;
+      let totalSamplesGenerated = 0;
+      let firstWriteLogged = false;
+      let synthOutcome: 'success' | 'failure' = 'success';
+      const sampleRate = this.status.sampleRate ?? 16000;
+
       let settled = false;
       const done = () => {
         if (!settled) {
           settled = true;
+          benchmarkLogger.logEvent('TTS_SYNTH_COMPLETE', traceId, {
+            charCount: text.length,
+            extraInfo: `samples=${totalSamplesGenerated},outcome=${synthOutcome}`,
+            metadata: {
+              sampleRateHz: sampleRate,
+              audioDurationMs: (totalSamplesGenerated / sampleRate) * 1000,
+              outcome: synthOutcome,
+            },
+          });
           // Ensure the last PCM tail is actually written before the pump
           // starts the next generation; otherwise the next chunk's audio
           // can race ahead and sound like a stutter/gap.
           void this.pcmWriteChain.then(() => {
             this.currentStream = null;
             this.currentDone = null;
+            benchmarkLogger.logEvent('TTS_PLAYBACK_COMPLETE', traceId, {
+              charCount: text.length,
+              extraInfo: 'all_pcm_writes_resolved',
+            });
             resolve();
           });
         }
@@ -475,11 +510,33 @@ class HindiTTS implements ITTSService {
             {
               onChunk: (chunk) => {
                 if (!chunk.samples || chunk.samples.length === 0) return;
+                if (!firstChunkDelivered) {
+                  firstChunkDelivered = true;
+                  benchmarkLogger.logEvent('TTS_FIRST_CHUNK_READY', traceId, {
+                    byteCount: chunk.samples.length * 2,
+                    extraInfo: `samples=${chunk.samples.length}`,
+                  });
+                }
+                totalSamplesGenerated += chunk.samples.length;
                 // Chain writes to preserve order across rapid callbacks.
                 // WRITE_BLOCKING on native applies backpressure so the
                 // AudioTrack buffer stays fed without overlap.
                 this.pcmWriteChain = this.pcmWriteChain
-                  .then(() => engine.writePcmChunk(chunk.samples))
+                  .then(async () => {
+                    await engine.writePcmChunk(chunk.samples);
+                    if (!firstWriteLogged) {
+                      firstWriteLogged = true;
+                      benchmarkLogger.logEvent(
+                        'AUDIOTRACK_FIRST_WRITE',
+                        traceId,
+                        {
+                          byteCount: chunk.samples.length * 2,
+                          extraInfo:
+                            'PCM write resolved; acoustic onset not measured',
+                        },
+                      );
+                    }
+                  })
                   .catch((err) => {
                     console.error('[VoiceTTS] Error writing PCM chunk:', err);
                   });
@@ -487,6 +544,10 @@ class HindiTTS implements ITTSService {
               onEnd: () => done(),
               onError: (event) => {
                 console.error('[VoiceTTS] Stream error:', event.message);
+                synthOutcome = 'failure';
+                benchmarkLogger.logEvent('BENCHMARK_FAILURE', traceId, {
+                  extraInfo: `tts_stream:${event.message}`,
+                });
                 this.status.error = event.message;
                 done();
               },
@@ -494,6 +555,10 @@ class HindiTTS implements ITTSService {
           );
         } catch (err) {
           console.error('[VoiceTTS] generateSpeechStream failed:', err);
+          synthOutcome = 'failure';
+          benchmarkLogger.logEvent('BENCHMARK_FAILURE', traceId, {
+            extraInfo: `tts_synthesis:${err instanceof Error ? err.message : String(err)}`,
+          });
           done();
         }
       })();
@@ -532,6 +597,13 @@ class HindiTTS implements ITTSService {
   }
 
   async destroy(): Promise<void> {
+    const hadModel = Boolean(this.engine || this.activeModelPath);
+    const unloadTraceId = benchmarkLogger.generateTraceId('tts-unload');
+    if (hadModel) {
+      benchmarkLogger.logEvent('TTS_MODEL_UNLOAD_START', unloadTraceId, {
+        extraInfo: this.activeModelPath ?? 'unknown',
+      });
+    }
     await this.stop();
     if (this.engine) {
       await this.engine.destroy();
@@ -548,6 +620,11 @@ class HindiTTS implements ITTSService {
       isSpeaking: false,
       queueLength: 0,
     };
+    if (hadModel) {
+      benchmarkLogger.logEvent('TTS_MODEL_UNLOAD_END', unloadTraceId, {
+        extraInfo: 'complete',
+      });
+    }
   }
 
   getStatus(): TTSStatus {
